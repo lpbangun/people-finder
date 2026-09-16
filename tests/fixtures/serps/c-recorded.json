@@ -1,0 +1,61 @@
+{
+  "schema": "recorded-serp.v1",
+  "fixture": "c-recorded",
+  "fictional": true,
+  "backend": "recorded_fixture",
+  "live_network": false,
+  "retrieved_at": "2026-09-10T08:05:00Z",
+  "notes": "Recorded search results for the thin/noisy fixture: common name, generic skills, and no result that observes the target employer for a peer path.",
+  "seeker_resume": "tests/fixtures/resumes/c-thin-noisy.md",
+  "target_job": "tests/fixtures/jobs/c-target.json",
+  "pack_results": [
+    {
+      "pack_id": "function_at_target",
+      "query": "\"Backend Engineer\" \"Northgate Retail Group\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/c-thin-noisy.md --job tests/fixtures/jobs/c-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 4,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/jordan-bell-services",
+          "title": "Jordan Bell - Backend Engineer - Lumen Freight Systems",
+          "snippet": "Python and SQL services."
+        },
+        {
+          "rank": 2,
+          "url": "https://www.linkedin.com/in/jordan-bell-college",
+          "title": "Jordan Bell - Backend Engineer - Ashgrove Technical College",
+          "snippet": "Python, REST APIs."
+        },
+        {
+          "rank": 3,
+          "url": "https://www.linkedin.com/in/jordyn-bell-dev",
+          "title": "Jordyn Bell - Backend Engineer",
+          "snippet": "Git, REST APIs."
+        },
+        {
+          "rank": 4,
+          "url": "https://www.linkedin.com/company/northgate-retail-group",
+          "title": "Northgate Retail Group",
+          "snippet": "Northgate Retail Group storefront engineering."
+        }
+      ]
+    },
+    {
+      "pack_id": "hiring_adjacent",
+      "query": "\"talent acquisition\" \"Northgate Retail Group\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/c-thin-noisy.md --job tests/fixtures/jobs/c-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 1,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/samir-haddad-talent",
+          "title": "Samir Haddad - Talent Acquisition Partner - Northgate Retail Group",
+          "snippet": "Storefront engineering hiring."
+        }
+      ]
+    }
+  ]
+}

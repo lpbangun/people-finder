@@ -1,0 +1,11 @@
+{
+  "schema": "job-card.v1",
+  "fictional": true,
+  "job_id": "bluecrest-staff-backend-engineer",
+  "title": "Staff Backend Engineer",
+  "company": "Bluecrest Analytics",
+  "department": "Platform Engineering",
+  "location": "Lisbon, Portugal",
+  "posting_text": "Title: Staff Backend Engineer\nCompany: Bluecrest Analytics\nDepartment: Platform Engineering\nLocation: Lisbon, Portugal\n\nBluecrest Analytics is hiring a Staff Backend Engineer for its platform group.\nGo, Kafka and Terraform experience is expected. Fictional benchmark posting; no real opening.",
+  "notes": "Synthetic fixture: target employer for the career-hop case."
+}

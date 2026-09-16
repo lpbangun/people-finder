@@ -1,0 +1,94 @@
+{
+  "schema": "recorded-serp.v1",
+  "fixture": "b-recorded",
+  "fictional": true,
+  "backend": "recorded_fixture",
+  "live_network": false,
+  "retrieved_at": "2026-09-10T08:05:00Z",
+  "notes": "Recorded search results for the career-hop fixture. The prior-employer result and the generic title results are both recorded so the ranking assertion can compare them.",
+  "seeker_resume": "tests/fixtures/resumes/b-career-hop.md",
+  "target_job": "tests/fixtures/jobs/b-target.json",
+  "pack_results": [
+    {
+      "pack_id": "alumni_at_target",
+      "query": "\"Ashvale Polytechnic Institute\" \"Bluecrest Analytics\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/b-career-hop.md --job tests/fixtures/jobs/b-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 0,
+      "results": []
+    },
+    {
+      "pack_id": "prior_employer_at_target",
+      "query": "\"Ionwave Systems\" \"Bluecrest Analytics\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/b-career-hop.md --job tests/fixtures/jobs/b-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 1,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/elodie-marchand-platform",
+          "title": "Elodie Marchand - Platform Engineer - Bluecrest Analytics | Ex-Ionwave Systems",
+          "snippet": "Formerly at Ionwave Systems. Platform group."
+        }
+      ]
+    },
+    {
+      "pack_id": "function_at_target",
+      "query": "\"Backend Engineer\" \"Bluecrest Analytics\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/b-career-hop.md --job tests/fixtures/jobs/b-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 3,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/tomas-brenner-bluecrest",
+          "title": "Tomas Brenner - Staff Backend Engineer - Bluecrest Analytics",
+          "snippet": "Backend services and Kafka."
+        },
+        {
+          "rank": 2,
+          "url": "https://www.linkedin.com/in/priya-nair-bluecrest",
+          "title": "Priya Nair - Senior Backend Engineer - Bluecrest Analytics",
+          "snippet": "Hiring for the platform group."
+        },
+        {
+          "rank": 3,
+          "url": "https://www.linkedin.com/in/elodie-marchand-platform",
+          "title": "Elodie Marchand - Platform Engineer - Bluecrest Analytics",
+          "snippet": "Ex-Ionwave Systems; backend platform work."
+        }
+      ]
+    },
+    {
+      "pack_id": "community_at_target",
+      "query": "\"Riverstone Ops Guild\" \"Bluecrest Analytics\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/b-career-hop.md --job tests/fixtures/jobs/b-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 0,
+      "results": []
+    },
+    {
+      "pack_id": "shared_stamp",
+      "query": "\"Ashvale Polytechnic Institute\" \"Software Engineering\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/b-career-hop.md --job tests/fixtures/jobs/b-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 0,
+      "results": []
+    },
+    {
+      "pack_id": "hiring_adjacent",
+      "query": "\"talent acquisition\" \"Bluecrest Analytics\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/b-career-hop.md --job tests/fixtures/jobs/b-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 1,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/lena-ostrowski-talent",
+          "title": "Lena Ostrowski - Technical Recruiter - Bluecrest Analytics",
+          "snippet": "Talent acquisition for platform."
+        }
+      ]
+    }
+  ]
+}

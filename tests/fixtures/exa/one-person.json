@@ -1,0 +1,26 @@
+{
+  "route": "codex_exa_plugin",
+  "tool": "mcp__codex_apps__exa_web_search_exa",
+  "retrieved_at": "2026-09-10T09:20:00Z",
+  "status": "completed",
+  "subject": {
+    "name": "Nadia Farouk",
+    "company": "Helioscale"
+  },
+  "lead": {
+    "name": "Nadia Farouk",
+    "headline": "Data Platform Engineer at Helioscale",
+    "url": "https://www.linkedin.com/in/nadia-farouk-data?trk=public_profile",
+    "sources": [
+      {
+        "url": "https://example.org/team/nadia-farouk",
+        "fetched_at": "2026-09-10T09:19:30Z",
+        "published_at": null,
+        "quote": "The inspected fictional page lists Nadia Farouk as a data platform engineer at Helioscale.",
+        "kind": "exa"
+      }
+    ]
+  },
+  "cost": "unknown",
+  "notes": "Recorded host-provider transcript (fictional), normalized for offline replay. One public people lead, cited. Recall only: this is not identity and not a contact."
+}

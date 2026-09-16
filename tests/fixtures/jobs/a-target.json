@@ -1,0 +1,11 @@
+{
+  "schema": "job-card.v1",
+  "fictional": true,
+  "job_id": "helioscale-senior-data-platform-engineer",
+  "title": "Senior Data Platform Engineer",
+  "company": "Helioscale",
+  "department": "Data Platform",
+  "location": "Remote (EU)",
+  "posting_text": "Title: Senior Data Platform Engineer\nCompany: Helioscale\nDepartment: Data Platform\nLocation: Remote (EU)\n\nWe are hiring a Senior Data Platform Engineer to own the telemetry ingestion platform.\nYou will work with Spark, dbt and Kubernetes, and partner with the analytics team.\nFictional benchmark posting; no real opening.",
+  "notes": "Synthetic fixture: target employer for the rich-stamps case."
+}

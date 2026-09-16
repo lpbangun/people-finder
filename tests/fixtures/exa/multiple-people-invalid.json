@@ -1,0 +1,42 @@
+{
+  "route": "codex_exa_plugin",
+  "tool": "mcp__codex_apps__exa_web_search_exa",
+  "retrieved_at": "2026-09-10T09:25:00Z",
+  "status": "completed",
+  "subject": {
+    "name": "Helioscale data platform",
+    "company": "Helioscale"
+  },
+  "leads": [
+    {
+      "name": "Fictional First",
+      "headline": "Data Platform Engineer at Helioscale",
+      "url": "https://www.linkedin.com/in/fictional-first-data",
+      "sources": [
+        {
+          "url": "https://example.org/team/fictional-first",
+          "fetched_at": "2026-09-10T09:24:00Z",
+          "published_at": null,
+          "quote": "The inspected fictional page lists Fictional First as a data platform engineer.",
+          "kind": "exa"
+        }
+      ]
+    },
+    {
+      "name": "Fictional Second",
+      "headline": "Senior Data Platform Engineer at Helioscale",
+      "url": "https://www.linkedin.com/in/fictional-second-data",
+      "sources": [
+        {
+          "url": "https://example.org/team/fictional-second",
+          "fetched_at": "2026-09-10T09:24:30Z",
+          "published_at": null,
+          "quote": "The inspected fictional page lists Fictional Second as a senior data platform engineer.",
+          "kind": "exa"
+        }
+      ]
+    }
+  ],
+  "cost": "unknown",
+  "notes": "Deliberately invalid recorded transcript (fictional): at most one people lead is ever accepted by this importer."
+}

@@ -1,0 +1,125 @@
+{
+  "schema": "recorded-serp.v1",
+  "fixture": "a-recorded",
+  "fictional": true,
+  "backend": "recorded_fixture",
+  "live_network": false,
+  "retrieved_at": "2026-09-10T08:05:00Z",
+  "notes": "Recorded search results for the rich-stamps fixture. Every query string is copied verbatim from `people-finder compile` output for this fixture pair.",
+  "seeker_resume": "tests/fixtures/resumes/a-rich-stamps.md",
+  "target_job": "tests/fixtures/jobs/a-target.json",
+  "pack_results": [
+    {
+      "pack_id": "alumni_at_target",
+      "query": "\"Northwind Institute of Technology\" \"Helioscale\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/a-rich-stamps.md --job tests/fixtures/jobs/a-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 4,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/ananya-rao-data-platform?trk=public_profile",
+          "title": "Ananya Rao - Data Platform Engineer - Helioscale",
+          "snippet": "Northwind Institute of Technology alum. Maintainer of the OpenKelvin Collective telemetry project."
+        },
+        {
+          "rank": 2,
+          "url": "https://www.linkedin.com/in/vikram-shetty-platform",
+          "title": "Vikram Shetty - Senior Data Platform Engineer - Helioscale | Northwind Institute of Technology",
+          "snippet": "Alum, Northwind Institute of Technology (M.S. Computer Science, 2018)."
+        },
+        {
+          "rank": 3,
+          "url": "https://www.linkedin.com/company/helioscale",
+          "title": "Helioscale: company overview",
+          "snippet": "Helioscale builds telemetry products."
+        },
+        {
+          "rank": 4,
+          "url": "https://www.linkedin.com/in/tomas-brenner-helioscale",
+          "title": "Tomas Brenner - Senior Data Platform Engineer - Helioscale",
+          "snippet": "Backend and data services."
+        }
+      ]
+    },
+    {
+      "pack_id": "prior_employer_at_target",
+      "query": "\"Ionwave Systems\" \"Helioscale\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/a-rich-stamps.md --job tests/fixtures/jobs/a-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 0,
+      "results": []
+    },
+    {
+      "pack_id": "function_at_target",
+      "query": "\"Data Platform Engineer\" \"Helioscale\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/a-rich-stamps.md --job tests/fixtures/jobs/a-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 2,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/sofia-marchetti-talent",
+          "title": "Sofia Marchetti - Technical Recruiter - Helioscale",
+          "snippet": "Talent acquisition for the data platform org."
+        },
+        {
+          "rank": 2,
+          "url": "https://www.linkedin.com/in/ananya-rao-data-platform?trk=profile-badge",
+          "title": "Ananya Rao - Data Platform Engineer at Helioscale",
+          "snippet": "Data platform engineer working on ingestion."
+        }
+      ]
+    },
+    {
+      "pack_id": "community_at_target",
+      "query": "\"OpenKelvin Collective\" \"Helioscale\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/a-rich-stamps.md --job tests/fixtures/jobs/a-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 3,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/ananya-rao-data-platform",
+          "title": "Ananya Rao - Data Platform Engineer - Helioscale",
+          "snippet": "OpenKelvin Collective steering group member."
+        },
+        {
+          "rank": 2,
+          "url": "https://www.linkedin.com/in/meera-iyer-helioscale",
+          "title": "Meera Iyer - Engineering Manager, Data Platform - Helioscale",
+          "snippet": "OpenKelvin Collective steering group."
+        },
+        {
+          "rank": 3,
+          "url": "https://www.linkedin.com/in/dmitri-volkov-systems",
+          "title": "Dmitri Volkov - Distributed Systems Researcher",
+          "snippet": "Northwind Institute of Technology PhD; OpenKelvin Collective contributor."
+        }
+      ]
+    },
+    {
+      "pack_id": "shared_stamp",
+      "query": "\"Northwind Institute of Technology\" \"Computer Science\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/a-rich-stamps.md --job tests/fixtures/jobs/a-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 0,
+      "results": []
+    },
+    {
+      "pack_id": "hiring_adjacent",
+      "query": "\"talent acquisition\" \"Helioscale\" site:linkedin.com/in",
+      "query_source": "people-finder compile --resume tests/fixtures/resumes/a-rich-stamps.md --job tests/fixtures/jobs/a-target.json",
+      "retrieved_at": "2026-09-10T08:05:00Z",
+      "result_count": 1,
+      "results": [
+        {
+          "rank": 1,
+          "url": "https://www.linkedin.com/in/sofia-marchetti-talent?trk=feed",
+          "title": "Sofia Marchetti - Technical Recruiter - Helioscale",
+          "snippet": "Talent acquisition partner."
+        }
+      ]
+    }
+  ]
+}

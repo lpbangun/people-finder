@@ -1,0 +1,11 @@
+{
+  "schema": "job-card.v1",
+  "fictional": true,
+  "job_id": "northgate-backend-engineer",
+  "title": "Backend Engineer",
+  "company": "Northgate Retail Group",
+  "department": "Engineering",
+  "location": "Berlin, Germany",
+  "posting_text": "Title: Backend Engineer\nCompany: Northgate Retail Group\nDepartment: Engineering\nLocation: Berlin, Germany\n\nNorthgate Retail Group is hiring a Backend Engineer for its storefront services.\nFictional benchmark posting; no real opening.",
+  "notes": "Synthetic fixture: target employer for the thin/noisy case."
+}
