@@ -1769,8 +1769,6 @@ def run_live_search(state, config, attempt, recorder):
         live["envelopes"].append(entry)
         if observed.get("results_mentioning_target_employer"):
             live["employer_tied"] = True
-            live["stopped_early"] = True
-            break
     return live
 
 
@@ -1846,7 +1844,11 @@ def rank_supplied_results(state, attempt, results_document, label):
                 observed_urls.add(normalized)
     lanes = []
     matched = None
+    peer_count = 0
+    hiring_adjacent_count = 0
     if isinstance(document, dict):
+        peer_count = len(document.get("candidates") or [])
+        hiring_adjacent_count = len(document.get("hiring_adjacent") or [])
         for lane_key in ("candidates", "hiring_adjacent"):
             for item in document.get(lane_key) or []:
                 if normalize_public_url(item.get("public_url")) in observed_urls:
@@ -1860,6 +1862,8 @@ def rank_supplied_results(state, attempt, results_document, label):
         "document": document,
         "observed_urls": sorted(observed_urls),
         "lanes": sorted(set(lanes)),
+        "peer_candidates": peer_count,
+        "hiring_adjacent_candidates": hiring_adjacent_count,
         "matched": matched,
     }
 
@@ -1972,12 +1976,29 @@ def run_journey(result, state, config):
                 "live results did not tie the selected employer to a ranked public profile"
             )
             continue
-        attempt["accepted"] = True
-        break
+        if rank.get("peer_candidates"):
+            attempt["accepted"] = True
+            attempt["lock_reason"] = "peer_candidate_ranked_from_live_results"
+            break
+        # A live-index reader lead is the documented fallback lane; keep the
+        # attempt as the fallback and try the next qualifying job for a peer
+        # lead before locking.
+        if attempt.get("fallback"):
+            continue
+        attempt["fallback"] = True
+        attempt["lock_reason"] = "hiring_adjacent_candidate_ranked_from_live_results"
 
     state.http_requests = list(recorder.requests)
-    state.locked = next((item for item in state.attempts if item.get("accepted")),
-                        state.attempts[0] if state.attempts else None)
+    accepted = next((item for item in state.attempts if item.get("accepted")), None)
+    fallback = next((item for item in state.attempts if item.get("fallback")), None)
+    state.locked = accepted or fallback or (state.attempts[0] if state.attempts else None)
+    if state.locked is not None and not state.locked.get("accepted"):
+        state.locked["accepted"] = True
+        state.locked.setdefault(
+            "lock_reason",
+            "hiring_adjacent_candidate_ranked_from_live_results"
+            if state.locked.get("fallback") else "no_attempt_produced_a_ranked_lead",
+        )
     if state.locked is not None:
         state.results_path = (state.locked.get("rank") or {}).get("results_path")
         state.candidates_path = (state.locked.get("rank") or {}).get("candidates_path")
@@ -2004,6 +2025,8 @@ def attempt_summary(attempt):
         "company": attempt["job"].get("company"),
         "url": attempt["job"].get("url"),
         "accepted": bool(attempt.get("accepted")),
+        "lock_reason": attempt.get("lock_reason") or None,
+        "fallback_lane_only": bool(attempt.get("fallback")),
         "rejected_because": attempt.get("rejected") or None,
         "score_overall": (attempt.get("score") or {}).get("overall"),
         "pursue_status": (attempt.get("pursue") or {}).get("status"),
@@ -2012,6 +2035,8 @@ def attempt_summary(attempt):
         "employer_tied": live.get("employer_tied"),
         "rank_counts": (rank.get("document") or {}).get("counts"),
         "rank_matched": bool(rank.get("matched")),
+        "peer_candidates": rank.get("peer_candidates"),
+        "hiring_adjacent_candidates": rank.get("hiring_adjacent_candidates"),
     }
 
 
@@ -2262,7 +2287,8 @@ def step_l10(result, state, config):
         "target_employer": company,
         "target_employer_tokens": employer_tokens(company),
         "employer_tied_result_observed": bool(tied),
-        "stopped_early_on_employer_tie": live.get("stopped_early"),
+        "stopped_early_on_employer_tie": False,
+        "lock_reason": locked.get("lock_reason"),
         "rejected_attempts": [
             {"attempt": item["index"], "company": item["job"].get("company"),
              "accepted_envelopes": len((item.get("live") or {}).get("envelopes") or []),
@@ -2366,6 +2392,9 @@ def step_l12(result, state, config):
         "schema": document.get("schema"),
         "counts": document.get("counts"),
         "candidate_lanes_observed": rank.get("lanes"),
+        "peer_candidates_ranked": rank.get("peer_candidates"),
+        "hiring_adjacent_candidates_ranked": rank.get("hiring_adjacent_candidates"),
+        "lock_reason": locked.get("lock_reason"),
         "matched_candidate": {
             "lane": item.get("lane"),
             "candidate_id": item.get("candidate_id"),
