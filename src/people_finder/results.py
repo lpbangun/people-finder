@@ -3,7 +3,7 @@
 Everything the ranker consumes is supplied by the caller: recorded SERP files,
 or a recorded provider envelope. This module refuses malformed input with a
 typed error so the CLI can exit 2 for a malformed fixture, and it never opens a
-network socket.
+network endpoint.
 """
 
 import json

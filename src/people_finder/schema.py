@@ -7,6 +7,7 @@ same checks as machine-readable evidence.
 
 import json
 import os
+import re
 
 from . import SCHEMA_CANDIDATES, SCHEMA_QUERIES, SCHEMA_SERP
 from .packs import PACK_INDEX
@@ -29,6 +30,17 @@ CLAIM_TOKENS = (
     "3rd-degree",
     "warm_intro",
 )
+
+# Search-result prose is evidence, not a product assertion. Public indexes
+# routinely put ordinary words such as "connections", "reachable", or
+# "contactable" in a title/snippet. Keep the claim scanner strict for
+# generated fields while allowing strings that are explicitly carried as
+# observed query/source evidence. Key validation remains unconditional below.
+OBSERVED_EVIDENCE_PATH_PARTS = frozenset({
+    "title", "snippet", "query", "source", "source_url", "url",
+    "headline_observed", "headlines_observed", "quote", "observed_at",
+    "retrieved_at", "fetched_at", "url_observed_in",
+})
 
 # Keys that must never be truthy on a candidate: the product holds no such fact.
 FORBIDDEN_TRUTHY_KEYS = (
@@ -72,12 +84,26 @@ def _iter_truthy_keys(value, path=""):
 
 
 def claim_token_hits(document):
-    """Find claim tokens in emitted output (value-level scan, case-insensitive)."""
+    """Find ungrounded relationship claims in emitted output.
+
+    Tokens inside explicitly observed evidence are allowed because the source
+    text is being quoted, not asserted by the product. Matching uses token
+    boundaries so ordinary plurals such as ``connections`` do not become a
+    false positive for the semantic claim ``connection``.
+    """
     hits = []
     for path, text in _iter_strings(document):
+        parts = {
+            part.lower()
+            for part in path.replace("[", ".").replace("]", "").split(".")
+            if part
+        }
+        if parts.intersection(OBSERVED_EVIDENCE_PATH_PARTS):
+            continue
         lowered = text.lower()
         for token in CLAIM_TOKENS:
-            if token in lowered:
+            pattern = r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])"
+            if re.search(pattern, lowered):
                 hits.append({"path": path, "token": token, "value": text})
     return hits
 
@@ -238,6 +264,7 @@ def validate_file(path):
 
 __all__ = [
     "CLAIM_TOKENS",
+    "OBSERVED_EVIDENCE_PATH_PARTS",
     "FORBIDDEN_TRUTHY_KEYS",
     "claim_token_hits",
     "forbidden_truthy_hits",
