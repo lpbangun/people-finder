@@ -80,10 +80,11 @@ def is_public_profile_url(url):
     if parts.scheme not in ("http", "https"):
         return False
     host = (parts.hostname or "").lower()
-    if host not in ("linkedin.com", "www.linkedin.com", "m.linkedin.com", "lnkd.in"):
-        return False
     if host == "lnkd.in":
         return True
+    if host not in ("linkedin.com", "www.linkedin.com", "m.linkedin.com") \
+            and not re.fullmatch(r"[a-z]{2}\.linkedin\.com", host):
+        return False
     path = parts.path or ""
     return path.lower().startswith("/in/")
 
@@ -98,7 +99,8 @@ def normalize_public_url(url):
         return ""
     parts = urlsplit(str(url).strip())
     host = (parts.hostname or "").lower()
-    if host in ("linkedin.com", "m.linkedin.com"):
+    if host == "linkedin.com" or host == "m.linkedin.com" \
+            or re.fullmatch(r"[a-z]{2}\.linkedin\.com", host):
         host = "www.linkedin.com"
     path = parts.path.rstrip("/")
     kept = [

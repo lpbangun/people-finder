@@ -11,15 +11,16 @@ verbatim in the supplied inputs.
 
 import hashlib
 import math
+import re
 from datetime import datetime, timezone
 
 from . import SCHEMA_CANDIDATES, SCHEMA_QUERIES, SCHEMA_SERP
-from .anchors import RESTRICTED_ANCHOR_TYPES
+from .anchors import HIRING_ADJACENT_TERMS, RESTRICTED_ANCHOR_TYPES
 from .packs import HIRING_ADJACENT_TERM_WEIGHT, PER_PATH_TOTAL_CAP, PER_TYPE_PER_PATH_CAP
 from .results import ResultError
 from .textutil import (all_terms_present, find_span, is_public_profile_url,
                        normalize_public_url, norm_phrase, phrase_present,
-                       profile_slug_tokens, round_score, split_title, squeeze)
+                       profile_slug_tokens, round_score, split_title, squeeze, tokens)
 
 STAMP_TYPES = ("rare_community", "school", "program", "prior_employer")
 
@@ -47,6 +48,281 @@ SHARED_STAMP_NOTE = (
     "Public-stamp proxy: two of the seeker's public stamps were observed in the "
     "same supplied result. No member-graph edge is observed or claimed."
 )
+
+
+# Eligibility is deliberately evaluated before affinity scoring. A shared school or
+# prior employer cannot rescue a result that lacks positional target-company evidence
+# or a matching function/level surface.
+C_SUITE_TERMS = (
+    "chief executive officer", "chief technology officer", "chief operating officer",
+    "chief financial officer", "chief product officer", "chief people officer",
+    "chief human resources officer", "chief revenue officer", "chief marketing officer",
+    "chief information officer", "chief", "ceo", "cto", "coo", "cfo", "cpo", "chro", "cro", "cmo",
+    "cio", "co-founder", "cofounder", "founder & ceo", "founder and ceo",
+)
+LEVEL_TERMS = {
+    "head", "director", "vp", "vice president", "manager", "lead", "principal", "staff",
+    "senior", "sr", "junior", "jr", "associate", "coordinator", "specialist", "analyst",
+    "engineer", "developer", "scientist", "researcher", "designer", "recruiter",
+}
+LEVEL_STOPWORDS = {"and", "of", "the", "for", "a", "an", "to", "in", "with"}
+FUNCTION_FAMILIES = {
+    "engineering": {"engineer", "engineering", "developer", "development", "software", "backend",
+                     "frontend", "platform", "infrastructure", "systems", "devops", "sre", "technical"},
+    "data": {"data", "analytics", "analytic", "scientist", "science", "research", "researcher",
+             "quantitative", "insights", "machine", "learning", "ml", "fraud"},
+    "product": {"product", "pm", "roadmap", "productmanager"},
+    "design": {"design", "designer", "ux", "ui", "creative"},
+    "go_to_market": {"gtm", "sales", "revenue", "account", "accounts", "business", "development",
+                      "partnerships", "partnership", "growth", "marketing", "demand", "brand"},
+    "people": {"people", "hr", "human", "resources", "talent", "recruiting", "recruitment",
+               "learning", "organizational", "organization", "workplace", "employee"},
+    "operations": {"operations", "operation", "ops", "program", "strategy", "workplace"},
+    "finance": {"finance", "financial", "accounting", "accountant", "fp", "treasury"},
+    "legal": {"legal", "counsel", "compliance", "privacy"},
+    "support": {"support", "success", "customer", "services", "service"},
+}
+HIRING_SURFACE_TERMS = tuple(dict.fromkeys((*HIRING_ADJACENT_TERMS, "recruiting", "recruitment", "sourcer")))
+
+
+def _text_fields(record):
+    fields = []
+    for hit in record.get("hits", []):
+        if hit.get("title"):
+            fields.append(("title", hit["title"], hit))
+        if hit.get("snippet"):
+            fields.append(("snippet", hit["snippet"], hit))
+    return fields
+
+
+def _contains_phrase(text, phrases):
+    return [phrase for phrase in phrases if phrase_present(text, phrase)]
+
+
+def _prior_target_occurrence(normalized, start, company_norm):
+    """Identify an employer occurrence explicitly marked as former/past/ex."""
+    before = normalized[:start]
+    after = normalized[start + len(company_norm):]
+    prior_before = re.search(
+        r"(?:^|\s)(?:former|formerly|previously|past|ex)"
+        r"(?:\s+at)?(?:\s+[a-z0-9]+){0,5}\s*$", before
+    )
+    prior_after = re.match(r"\s+(?:former|formerly|previously|past)\b", after)
+    return bool(prior_before or prior_after)
+
+
+def _target_evidence(company, record):
+    """Return positional current-employer evidence, never URL/name-only matches."""
+    evidence = []
+    rejected_name_only = False
+    company_norm = norm_phrase(company)
+    if not company_norm:
+        return evidence, rejected_name_only
+    target_pattern = re.compile(
+        r"(?<![a-z0-9])" + re.escape(company_norm) + r"(?![a-z0-9])"
+    )
+    for field, text, hit in _text_fields(record):
+        normalized = norm_phrase(text)
+        positions = [match.start() for match in target_pattern.finditer(normalized)]
+        if not positions or not phrase_present(text, company):
+            continue
+        if all(_prior_target_occurrence(normalized, start, company_norm) for start in positions):
+            continue
+        leading, remainder = split_title(text)
+        in_leading_name = phrase_present(leading, company) and not phrase_present(remainder, company)
+        if in_leading_name:
+            rejected_name_only = True
+            continue
+        structured = field == "title" and (leading != text or phrase_present(text, " at "))
+        if field == "snippet":
+            structured = (
+                leading != text
+                or phrase_present(text, " at ")
+                or phrase_present(text, " works ")
+                or phrase_present(text, " employee")
+                or phrase_present(text, " current ")
+                or phrase_present(text, " team")
+                or phrase_present(text, " joined ")
+                or phrase_present(text, " employed ")
+            )
+        if not structured:
+            continue
+        quote = find_span(text, company)
+        if not quote:
+            continue
+        evidence.append({
+            "field": field,
+            "quote": quote,
+            "source": hit.get("source", ""),
+            "source_url": hit.get("source_url", ""),
+            "observed_at": hit.get("retrieved_at", "") or hit.get("observed_at", ""),
+            "position": hit.get("position", ""),
+        })
+    unique = []
+    seen = set()
+    for row in evidence:
+        key = (row["field"], row["quote"], row["position"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    return unique, rejected_name_only
+
+
+def _function_families(text):
+    words = set(tokens(text))
+    families = {family for family, vocabulary in FUNCTION_FAMILIES.items() if words.intersection(vocabulary)}
+    normalized = norm_phrase(text)
+    if "go to market" in normalized or "go to market" in normalized.replace("-", " "):
+        families.add("go_to_market")
+    if "human resources" in normalized:
+        families.add("people")
+    if "business operations" in normalized:
+        families.add("operations")
+    return families
+
+
+def _target_function_info(target):
+    title = squeeze(target.get("title", ""))
+    department = squeeze(target.get("department", ""))
+    title_words = set(tokens(title)) - LEVEL_STOPWORDS - LEVEL_TERMS
+    department_words = set(tokens(department)) - LEVEL_STOPWORDS - LEVEL_TERMS
+    families = _function_families(f"{title} {department}")
+    return {
+        "title": title,
+        "department": department,
+        "title_words": title_words,
+        "department_words": department_words,
+        "families": families,
+    }
+
+
+def _level_info(text):
+    normalized = norm_phrase(text)
+    c_suite = any(phrase_present(normalized, term) for term in C_SUITE_TERMS)
+    if c_suite:
+        return {"class": "c_suite", "observed": _contains_phrase(text, C_SUITE_TERMS)}
+    if any(phrase_present(normalized, term) for term in ("head", "director", "vp", "vice president", "manager")):
+        level = "function_head"
+    elif any(phrase_present(normalized, term) for term in ("senior", "staff", "principal", "lead", "associate", "intern")):
+        level = "role_peer_with_level"
+    else:
+        level = "role_peer_level_unspecified"
+    return {"class": level, "observed": _contains_phrase(text, tuple(sorted(LEVEL_TERMS)))}
+
+
+def _function_level_evidence(target, record):
+    info = _target_function_info(target)
+    candidates = []
+    for field, text, hit in _text_fields(record):
+        words = set(tokens(text))
+        core_overlap = sorted(info["title_words"].intersection(words))
+        department_overlap = sorted(info["department_words"].intersection(words))
+        family_overlap = sorted(info["families"].intersection(_function_families(text)))
+        role_overlap = sorted(set(core_overlap).union(department_overlap))
+        level = _level_info(text)
+        if not (family_overlap or len(role_overlap) >= 2):
+            continue
+        if not role_overlap and not family_overlap:
+            continue
+        # A snippet must carry an explicit role/level phrase; a bare department
+        # mention is not enough to establish a function peer.
+        if not level["observed"]:
+            continue
+        if level["class"] == "c_suite":
+            continue
+        is_head = level["class"] == "function_head"
+        match_kind = "function_head" if is_head else "function_peer"
+        candidates.append({
+            "field": field,
+            "quote": text,
+            "source": hit.get("source", ""),
+            "source_url": hit.get("source_url", ""),
+            "observed_at": hit.get("retrieved_at", "") or hit.get("observed_at", ""),
+            "position": hit.get("position", ""),
+            "match_kind": match_kind,
+            "level": level["class"],
+            "role_terms": role_overlap,
+            "function_families": family_overlap,
+            "level_terms": level["observed"],
+        })
+    # A function head may be evidenced by department family alone; a peer needs
+    # a role/function overlap, which prevents an alumnus in another department
+    # from qualifying solely on a shared stamp.
+    return candidates, info
+
+
+def _record_eligibility(target, record):
+    target_evidence, name_only = _target_evidence(target.get("company", ""), record)
+    all_text = " ".join(text for _field, text, _hit in _text_fields(record))
+    levels = [_level_info(text) for _field, text, _hit in _text_fields(record)]
+    c_suite = any(item["class"] == "c_suite" for item in levels)
+    base = {
+        "status": "ineligible",
+        "lane": None,
+        "reason_code": "",
+        "target_company_evidence": target_evidence,
+        "function_evidence": [],
+        "level_evidence": [],
+        "rationale": "",
+        "c_suite": c_suite,
+        "name_only_target_match": name_only,
+    }
+    if not target_evidence:
+        base["reason_code"] = "name_only_target_match" if name_only else "target_company_evidence_missing"
+        base["rationale"] = "Excluded: positional current target-company evidence was not observed in supplied search text."
+        return base
+    if c_suite:
+        base["reason_code"] = "c_suite_excluded"
+        base["rationale"] = "Excluded: a C-suite level was observed; executive backfill is outside peer eligibility."
+        base["level_evidence"] = [
+            {"field": field, "quote": text, "level": "c_suite"}
+            for field, text, _hit in _text_fields(record) if _level_info(text)["class"] == "c_suite"
+        ]
+        return base
+    hiring_terms = _contains_phrase(all_text, HIRING_SURFACE_TERMS)
+    function_evidence, _info = _function_level_evidence(target, record)
+    if hiring_terms:
+        base["status"] = "eligible"
+        base["lane"] = LANE_HIRING_ADJACENT
+        base["reason_code"] = "hiring_adjacent"
+        base["function_evidence"] = [
+            {
+                "field": field, "quote": text, "surface_terms": hiring_terms,
+                "source": _hit.get("source", ""), "source_url": _hit.get("source_url", ""),
+                "observed_at": _hit.get("retrieved_at", "") or _hit.get("observed_at", ""),
+            }
+            for field, text, _hit in _text_fields(record)
+            if _contains_phrase(text, HIRING_SURFACE_TERMS)
+        ]
+        base["level_evidence"] = [
+            {
+                "field": field, "quote": text, "level": _level_info(text)["class"],
+                "source": _hit.get("source", ""), "source_url": _hit.get("source_url", ""),
+                "observed_at": _hit.get("retrieved_at", "") or _hit.get("observed_at", ""),
+            }
+            for field, text, _hit in _text_fields(record)
+            if _contains_phrase(text, HIRING_SURFACE_TERMS)
+        ]
+        base["rationale"] = "Eligible in the hiring-adjacent lane: current target-company evidence and a hiring surface are both observed; it cannot reorder peer leads."
+        return base
+    if not function_evidence:
+        base["reason_code"] = "wrong_function_or_level"
+        base["rationale"] = "Excluded: current target-company evidence is present, but no same-function peer or relevant function-head evidence was observed."
+        return base
+    base["status"] = "eligible"
+    base["lane"] = LANE_PEER
+    base["reason_code"] = function_evidence[0]["match_kind"]
+    base["function_evidence"] = function_evidence
+    base["level_evidence"] = [
+        {"field": row["field"], "quote": row["quote"], "level": row["level"],
+         "level_terms": row["level_terms"]}
+        for row in function_evidence
+    ]
+    base["rationale"] = (
+        "Eligible as a same-function peer or relevant function head: current target-company "
+        "attribution, function evidence, and observed role level are all cited below."
+    )
+    return base
 
 
 def _utc_now():
@@ -91,16 +367,12 @@ def _match_lexicon_terms(pack, text):
 
 
 def _target_observed(anchor_value, title, snippet, url_key, slug_text):
-    if phrase_present(title, anchor_value):
-        return "title"
-    if phrase_present(snippet, anchor_value):
-        return "snippet"
-    if slug_text and phrase_present(slug_text, anchor_value):
-        return "url"
-    slug_company = norm_phrase(anchor_value).replace(" ", "-")
-    if slug_company and slug_company in url_key:
-        return "url"
-    return ""
+    """Compatibility helper returning only positional current-employer fields."""
+    del url_key, slug_text
+    evidence, _name_only = _target_evidence(anchor_value, {
+        "hits": [{"title": title, "snippet": snippet}],
+    })
+    return evidence[0]["field"] if evidence else ""
 
 
 STAMP_PATHS = ("alumni_at_target", "prior_employer_at_target", "community_at_target")
@@ -258,6 +530,10 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
                 "pack_id": pack_id,
                 "position": row["position"],
                 "rank_in_pack": row["rank_in_pack"],
+                "source": results_source,
+                "source_url": row.get("source_url", ""),
+                "retrieved_at": (row.get("observed_at", "") or entry.get("retrieved_at", "")
+                                  or results_doc.get("retrieved_at", "")),
                 "slug_text": " ".join(profile_slug_tokens(url_key)),
             })
 
@@ -272,9 +548,10 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
             if fields:
                 observed[anchor["anchor_id"]] = {"type": anchor["type"], "fields": fields}
         hit["anchors"] = observed
-        hit["target_observed_in"] = _target_observed(
-            target_company, hit["title"], hit["snippet"], hit["url_key"], hit["slug_text"]
-        )
+        target_evidence, name_only = _target_evidence(target_company, {"hits": [hit]})
+        hit["target_evidence"] = target_evidence
+        hit["target_name_only_match"] = name_only
+        hit["target_observed_in"] = sorted({row["field"] for row in target_evidence})
         hit["paths"] = _fire_paths(hit, packs)
 
     idf = {}
@@ -295,14 +572,16 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
             lane = LANE_HIRING_ADJACENT
         elif hit["paths"]:
             lane = LANE_PEER
+        elif hit["target_observed_in"] or hit["target_name_only_match"] or hit["anchors"]:
+            # Retain target-attributed, untyped, name-only, or anchor-bearing rows
+            # long enough for the eligibility gate to emit a precise reason.
+            lane = LANE_PEER
         else:
-            reason = ("target_employer_not_observed_in_supplied_result"
-                      if not hit["target_observed_in"] else "no_typed_anchor_matched")
             suppressed.append({
                 "url": hit["url_observed"],
                 "observed_in": [hit["position"]],
                 "packs_observed": [hit["pack_id"]],
-                "reason": reason,
+                "reason": "target_employer_not_observed_in_supplied_result",
             })
             continue
         record = merged.setdefault(hit["url_key"], {
@@ -312,6 +591,8 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
             "anchors_matched": {},
             "hits": [],
             "target_observed_in": set(),
+            "target_evidence": [],
+            "retrieved_at": set(),
             "url_observed_in": [],
         })
         if lane == LANE_HIRING_ADJACENT:
@@ -320,15 +601,45 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
         record["hits"].append(hit)
         record["url_observed_in"].append(f"{results_source}#{hit['position']}")
         if hit["target_observed_in"]:
-            record["target_observed_in"].add(hit["target_observed_in"])
+            record["target_observed_in"].update(hit["target_observed_in"])
+        record["target_evidence"].extend(hit.get("target_evidence", []))
+        if hit.get("retrieved_at"):
+            record["retrieved_at"].add(hit["retrieved_at"])
         for anchor_id, info in hit["anchors"].items():
             slot = record["anchors_matched"].setdefault(anchor_id, {"fields": set(), "packs": set()})
             slot["fields"].update(info["fields"])
             slot["packs"].add(hit["pack_id"])
 
-    # ---- phase 4: build candidates -----------------------------------------
+    # ---- phase 4: eligibility before affinity scoring -----------------------
     candidates = []
     for url_key, record in merged.items():
+        eligibility = _record_eligibility(target, record)
+        if eligibility["status"] != "eligible":
+            observed_positions = sorted({hit["position"] for hit in record["hits"]})
+            observed_packs = sorted({hit["pack_id"] for hit in record["hits"]})
+            observed_url = record["hits"][0]["url_observed"] if record["hits"] else url_key
+            suppressed.append({
+                "url": observed_url,
+                "observed_in": observed_positions,
+                "packs_observed": observed_packs,
+                "reason": eligibility["reason_code"],
+                "eligibility_rationale": eligibility["rationale"],
+                "target_company_evidence": eligibility["target_company_evidence"],
+            })
+            continue
+
+        # Hiring surfaces are explicitly retained in their own lane even when a
+        # result also happens to carry a peer anchor. This prevents a recruiter
+        # or hiring surface from displacing a same-function peer.
+        record["eligibility"] = eligibility
+        record["lane"] = eligibility["lane"]
+        if record["lane"] == LANE_HIRING_ADJACENT:
+            record["paths"] = {path for path in record["paths"] if path == "hiring_adjacent"}
+            if not record["paths"]:
+                record["paths"] = {"hiring_adjacent"}
+        else:
+            record["paths"] = {path for path in record["paths"] if path != "hiring_adjacent"}
+
         matched_ids = sorted(record["anchors_matched"])
         score, breakdown, per_path = _score_candidate(record, packs, anchors_by_id, idf)
 
@@ -367,16 +678,19 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
         if record["lane"] == LANE_HIRING_ADJACENT:
             notes.append(HIRING_ADJACENT_NOTE)
 
-        combined_text = " ".join(
-            [hit["title"] for hit in record["hits"]] + [hit["snippet"] for hit in record["hits"]]
-        )
-        employer_evidence = [
-            {
-                "field": field,
-                "quote": find_span(combined_text, target_company) or target_company,
-            }
-            for field in sorted(record["target_observed_in"])
-        ]
+        target_evidence = []
+        target_seen = set()
+        for row in eligibility["target_company_evidence"]:
+            key = (row.get("field", ""), row.get("quote", ""), row.get("position", ""))
+            if key not in target_seen:
+                target_seen.add(key)
+                target_evidence.append(row)
+        observed_at_target = {
+            "status": "observed",
+            "observed_in": sorted(record["target_observed_in"]),
+            "retrieved_at": sorted(record["retrieved_at"]),
+            "evidence": target_evidence,
+        }
 
         candidates.append({
             "candidate_id": _candidate_id(url_key),
@@ -390,7 +704,16 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
                 "value": target_company,
                 "status": "observed_in_supplied_results",
                 "observed_in": sorted(record["target_observed_in"]),
-                "evidence": employer_evidence,
+                "evidence": target_evidence,
+            },
+            "observed_at_target": observed_at_target,
+            "selection_eligible": True,
+            "eligibility": eligibility,
+            "function_level_rationale": eligibility["rationale"],
+            "function_level": {
+                "rationale": eligibility["rationale"],
+                "function_evidence": eligibility["function_evidence"],
+                "level_evidence": eligibility["level_evidence"],
             },
             "lane": record["lane"],
             "paths": sorted(record["paths"]),
@@ -415,6 +738,22 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
     hiring_adjacent = sorted([c for c in candidates if c["lane"] == LANE_HIRING_ADJACENT],
                              key=lambda c: (-c["score"], c["candidate_id"]))
 
+    selection_shortfalls = []
+    if not peer:
+        selection_shortfalls.append({
+            "code": "no_eligible_peer",
+            "reason": (
+                "No same-function peer or relevant function head met the current target-company "
+                "and function-level evidence requirements."
+            ),
+        })
+    execution = compiled.get("execution") if isinstance(compiled.get("execution"), dict) else {}
+    observed_reason_counts = {}
+    for item in suppressed:
+        reason = item.get("reason", "unknown")
+        observed_reason_counts[reason] = observed_reason_counts.get(reason, 0) + 1
+    selected_count = len(peer) + len(hiring_adjacent)
+
     document = {
         "schema": SCHEMA_CANDIDATES,
         "generated_at": generated_at or _utc_now(),
@@ -433,6 +772,83 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
             "hiring_adjacent": len(hiring_adjacent),
             "suppressed_hits": len(suppressed),
         },
+        "manifest": {
+            "role": target.get("title", ""),
+            "inputs": {
+                "resume": compiled.get("seeker", {}).get("source_resume", ""),
+                "job": target.get("job_source", ""),
+                "queries": queries_source,
+                "results": results_source,
+            },
+            "route": {
+                "backend": results_doc.get("backend", "recorded_fixture"),
+                "network_calls": 0,
+                "retry_count": 0,
+                "terminal_route_failure": None,
+            },
+            "budgets": {
+                "max_queries": execution.get("query_budget", 12),
+                "queries_compiled": sum(len(pack.get("queries", [])) for pack in compiled.get("packs", [])),
+                "queries_skipped": sum(len(pack.get("queries_skipped", [])) for pack in compiled.get("packs", [])),
+                "query_skip_reason": execution.get("query_skip_reason"),
+                "max_wall_clock_seconds": 900,
+                "wall_clock_seconds": None,
+                "within_wall_clock_budget": None,
+            },
+            "queries": {
+                "available": sum(len(pack.get("queries", [])) for pack in compiled.get("packs", [])),
+                "supplied_hits": total_hits,
+            },
+            "leads": {
+                "discovery_qualified": selected_count,
+                "peer": len(peer),
+                "hiring_adjacent": len(hiring_adjacent),
+            },
+            # Zero is intentional: this discovery stage does not attribute or
+            # guess addresses and has not run a mailbox check.
+            "emails": 0,
+            "contact_outcomes": {
+                "attributed": 0,
+                "mailbox": "not_checked",
+                "brief_acceptance": "not_attempted",
+                "guessed_addresses_excluded": True,
+                "deliverability_claimed": False,
+            },
+            "blockers": selection_shortfalls,
+            "persistence": {"writes": False, "state": "not_performed"},
+        },
+        "execution": {
+            "query_budget": execution.get("query_budget", 12),
+            "queries_available": sum(len(pack.get("queries", [])) for pack in compiled.get("packs", [])),
+            "queries_skipped": sum(len(pack.get("queries_skipped", [])) for pack in compiled.get("packs", [])),
+            "supplied_hits": total_hits,
+            "network_calls": 0,
+            "retry_count": 0,
+            "terminal_route_failure": None,
+            "within_query_budget": bool(execution.get("within_query_budget", True)),
+        },
+        "eligibility_policy": {
+            "order": "current_target_company_then_function_and_level_then_affinity",
+            "peer_requirement": "same-role/function peer or relevant function head",
+            "c_suite": "excluded",
+            "hiring_adjacent": "separate lane; cannot displace peers",
+            "name_only_target_match": "excluded",
+        },
+        "selection": {
+            "peer_count": len(peer),
+            "hiring_adjacent_count": len(hiring_adjacent),
+            "shortfalls": selection_shortfalls,
+            "suppressed_reason_counts": dict(sorted(observed_reason_counts.items())),
+        },
+        "selection_shortfalls": selection_shortfalls,
+        "outcome_counters": {
+            "discovery_qualified_leads": selected_count,
+            "attributed_email": 0,
+            "mailbox_outcome": {"status": "not_checked", "checked": 0, "not_checked": selected_count},
+            "brief_acceptance_status": {"status": "not_attempted", "attempted": 0, "not_attempted": selected_count},
+            "guessed_addresses_excluded": True,
+            "deliverability_claimed": False,
+        },
         "candidates": peer,
         "hiring_adjacent": hiring_adjacent,
         "suppressed": sorted(suppressed, key=lambda item: (item["url"], item["reason"])),
@@ -450,9 +866,9 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
             "cross_lane_ordering": "not_supported",
             "score_comparison": "within_lane_only",
             "lane_precedence": (
-                "stamp evidence (school, program, prior employer, community, shared_stamp) "
-                "takes precedence; a result whose only peer signal is a function term stays in "
-                "the hiring-adjacent lane"
+                "eligibility requires current target-company evidence plus same-function peer or "
+                "relevant function-head evidence before affinity scoring; hiring-adjacent surfaces "
+                "remain in their own lane and cannot displace peers"
             ),
             "shared_stamp_label": "public_stamp_proxy",
         },

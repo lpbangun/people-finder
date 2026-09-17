@@ -14,6 +14,7 @@ from .anchors import (AnchorError, GENERIC_SCHOOL_TOKENS, HIRING_ADJACENT_TERMS,
 from .textutil import norm_phrase, squeeze
 
 USER_AGENT_PACKS = 3          # queries emitted per pack
+MAX_QUERIES_PER_RUN = 12    # bounded host route budget per role
 PER_PATH_TOTAL_CAP = 12.0
 PER_TYPE_PER_PATH_CAP = 2
 HIRING_ADJACENT_TERM_WEIGHT = 0.5   # per matched hiring-adjacent lexicon term
@@ -105,6 +106,22 @@ def _query_for(value_a, value_b=""):
     return f"{clause} site:linkedin.com/in"
 
 
+def _skip_pack(spec, reason, *, missing_anchor_types=(), observed_stamp_count=None):
+    missing_ids = [f"anchor_{anchor_type}_absent" for anchor_type in missing_anchor_types]
+    payload = {
+        "pack_id": spec["pack_id"],
+        "lane": spec["lane"],
+        "reason": reason,
+        "absence_reason": reason,
+        "missing_anchor_types": list(missing_anchor_types),
+        "missing_anchor_ids": missing_ids,
+        "missing_anchor_id": missing_ids[0] if missing_ids else None,
+    }
+    if observed_stamp_count is not None:
+        payload["observed_stamp_count"] = observed_stamp_count
+    return None, payload
+
+
 def _compile_pack(spec, anchors, target):
     company = target["company"]
     queries = []
@@ -126,15 +143,13 @@ def _compile_pack(spec, anchors, target):
             })
             used.extend([left["anchor_id"], right["anchor_id"]])
         if len(stamps) < spec["requires_stamp_count"]:
-            return None, {
-                "pack_id": spec["pack_id"],
-                "lane": spec["lane"],
-                "reason": (
-                    "fewer than two seeker public stamps were extracted; a shared_stamp "
-                    "proxy cannot be formed without inventing one"
-                ),
-                "observed_stamp_count": len(stamps),
-            }
+            return _skip_pack(
+                spec,
+                "fewer than two seeker public stamps were extracted; a shared_stamp "
+                "proxy cannot be formed without inventing one",
+                missing_anchor_types=("school", "prior_employer", "rare_community"),
+                observed_stamp_count=len(stamps),
+            )
     elif spec["pack_id"] == "hiring_adjacent":
         for term in spec["lexicon"][:USER_AGENT_PACKS]:
             queries.append({
@@ -149,12 +164,11 @@ def _compile_pack(spec, anchors, target):
             if anchor["type"] in spec["match_anchor_types"] and anchor["used_in_ranking"]
         ]
         if not matched:
-            return None, {
-                "pack_id": spec["pack_id"],
-                "lane": spec["lane"],
-                "reason": "no anchor of the required types was extracted from the supplied inputs",
-                "missing_anchor_types": list(spec["match_anchor_types"]),
-            }
+            return _skip_pack(
+                spec,
+                "no anchor of the required types was extracted from the supplied inputs",
+                missing_anchor_types=spec["match_anchor_types"],
+            )
         for anchor in matched[:USER_AGENT_PACKS]:
             queries.append({
                 "query": _query_for(anchor["value"], company) if spec["requires_target_employer"]
@@ -164,11 +178,11 @@ def _compile_pack(spec, anchors, target):
             used.append(anchor["anchor_id"])
 
     if not queries:
-        return None, {
-            "pack_id": spec["pack_id"],
-            "lane": spec["lane"],
-            "reason": "no query could be formed from the supplied inputs",
-        }
+        return _skip_pack(
+            spec,
+            "no query could be formed from the supplied inputs",
+            missing_anchor_types=spec["match_anchor_types"],
+        )
 
     pack = {
         "pack_id": spec["pack_id"],
@@ -198,6 +212,52 @@ def _compile_pack(spec, anchors, target):
     return pack, None
 
 
+def _apply_query_budget(packs):
+    """Keep every compiled lane represented while respecting the per-run cap.
+
+    Any query removed by the cap remains visible in the pack's explicit
+    ``queries_skipped`` ledger, so a host can distinguish bounded execution from
+    an accidental omission.
+    """
+    originals = {pack["pack_id"]: list(pack.get("queries", [])) for pack in packs}
+    before = sum(len(rows) for rows in originals.values())
+    selected = {pack["pack_id"]: [] for pack in packs}
+    if before <= MAX_QUERIES_PER_RUN:
+        for pack in packs:
+            selected[pack["pack_id"]] = list(originals[pack["pack_id"]])
+    else:
+        for pack in packs:
+            if originals[pack["pack_id"]]:
+                selected[pack["pack_id"]].append(originals[pack["pack_id"]][0])
+        remaining = MAX_QUERIES_PER_RUN - sum(len(rows) for rows in selected.values())
+        while remaining > 0:
+            progressed = False
+            for pack in packs:
+                pack_id = pack["pack_id"]
+                rows = selected[pack_id]
+                if len(rows) < len(originals[pack_id]):
+                    rows.append(originals[pack_id][len(rows)])
+                    remaining -= 1
+                    progressed = True
+                    if remaining == 0:
+                        break
+            if not progressed:
+                break
+    for pack in packs:
+        pack_id = pack["pack_id"]
+        rows = selected[pack_id]
+        skipped = originals[pack_id][len(rows):]
+        pack["queries"] = rows
+        pack["query"] = rows[0]["query"] if rows else ""
+        pack["anchor_ids"] = sorted({anchor_id for row in rows for anchor_id in row.get("anchor_ids", [])})
+        pack["queries_compiled_before_cap"] = len(originals[pack_id])
+        pack["queries_skipped"] = [
+            {**row, "skip_reason": "per-run query budget cap"}
+            for row in skipped
+        ]
+    return before, sum(len(rows) for rows in selected.values())
+
+
 def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
                   job_source="<supplied job card>", generated_at=None):
     """Compile the query packs document (people-queries.v1)."""
@@ -214,6 +274,7 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
         elif skip:
             skipped.append(skip)
 
+    query_count_before_cap, query_count = _apply_query_budget(packs)
     targets = [anchor for anchor in anchors if anchor["type"] == "target_employer"]
     company_observed = targets[0]["evidence"]["quote"] if targets else ""
 
@@ -227,6 +288,20 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
         "unknowns": extracted["unknowns"],
         "packs": packs,
         "packs_skipped": skipped,
+        "execution": {
+            "query_budget": MAX_QUERIES_PER_RUN,
+            "queries_compiled_before_cap": query_count_before_cap,
+            "queries_compiled": query_count,
+            "queries_skipped": sum(len(pack.get("queries_skipped", [])) for pack in packs),
+            "query_skip_reason": (
+                "per-run query budget cap"
+                if any(pack.get("queries_skipped") for pack in packs) else None
+            ),
+            "within_query_budget": query_count <= MAX_QUERIES_PER_RUN,
+            "network_calls": 0,
+            "retry_count": 0,
+            "terminal_route_failure": None,
+        },
         "lane_policy": {
             "peer": "peer candidates are ordered inside this lane only",
             "hiring_adjacent": (
@@ -250,6 +325,7 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
                 "per_path_total": PER_PATH_TOTAL_CAP,
                 "per_anchor_type_per_path": PER_TYPE_PER_PATH_CAP,
                 "queries_per_pack": USER_AGENT_PACKS,
+                "queries_per_run": MAX_QUERIES_PER_RUN,
             },
             "required_filter": (
                 "for peer packs the target employer must be observed in the supplied "

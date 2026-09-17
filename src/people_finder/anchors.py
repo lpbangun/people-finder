@@ -9,7 +9,7 @@ import json
 import os
 import re
 
-from .textutil import norm_phrase, squeeze, tokens
+from .textutil import norm_phrase, phrase_present, squeeze, tokens
 
 # ---------------------------------------------------------------------------
 # Anchor weights (ARCHITECTURE.md "Ranking: sparse typed anchors, not embeddings")
@@ -29,12 +29,25 @@ WEIGHTS = {
 GENERIC_SCHOOL_WEIGHT = 0.5
 
 SECTION_ALIASES = {
-    "education": ("education", "academics", "academic", "studies", "schooling"),
-    "experience": ("experience", "work experience", "employment", "career", "roles"),
+    "education": (
+        "education", "academics", "academic", "academic background", "studies",
+        "schooling", "education and learning", "learning and education", "education learning",
+    ),
+    "experience": (
+        "experience", "work experience", "professional experience", "employment",
+        "employment history", "work history", "career", "career history", "roles",
+        "professional background",
+    ),
     "community": ("community", "open source", "open-source", "oss", "public work",
                   "speaking", "talks", "conferences", "volunteering"),
-    "skills": ("skills", "tools", "technologies", "tech stack", "stack"),
-    "projects": ("projects", "papers", "publications", "research", "thesis work"),
+    "skills": (
+        "skills", "core skills", "technical skills", "competencies", "capabilities",
+        "tools", "technologies", "tech stack", "stack",
+    ),
+    "projects": (
+        "projects", "selected work", "selected projects", "papers", "publications",
+        "research", "thesis work",
+    ),
 }
 
 ORGANIZATION_SUFFIXES = (
@@ -49,14 +62,33 @@ ORGANIZATION_SUFFIXES = (
     "School",
 )
 
-_CONNECTORS = r"(?:of|the|and|for|de|du|di|von|at)"
-_WORD = r"[A-Z][A-Za-z'&.\-]*"
-# Longest capitalized phrase that ends in an organization suffix: "Northwind
-# Institute of Technology" resolves as a whole, never as "Northwind Institute".
+_CONNECTORS = r"(?:of|the|and|for|de|du|di|von|at|in)"
+_WORD = r"[A-Z][A-Za-z0-9'&.\-]*"
+_SCHOOL_SUFFIX = r"(?:" + "|".join(re.escape(item) for item in ORGANIZATION_SUFFIXES) + r")"
+
+# Education records appear in both common word orders. Keep these expressions
+# bounded by punctuation so a school never absorbs a city, date or the next
+# field on a resume line. The old suffix-only expression missed the common
+# ``University of X`` form.
+_SCHOOL_PREFIX_RE = re.compile(
+    r"\b(University\s+of\s+" + _WORD
+    + r"(?:\s+(?:" + _CONNECTORS + r"\s+)?" + _WORD + r")*)",
+)
+_SCHOOL_SUFFIX_RE = re.compile(
+    r"\b(" + _WORD
+    + r"(?:\s+(?:" + _CONNECTORS + r"\s+)?" + _WORD + r")*\s+"
+    + _SCHOOL_SUFFIX
+    + r"(?:\s+(?:" + _CONNECTORS + r"\s+)?" + _WORD + r")*)",
+)
+
+# Backwards-compatible matcher name; it now covers both University-of-X and
+# X-University organization orders while retaining the historical group(1) API.
 SCHOOL_RE = re.compile(
-    r"(" + _WORD + r"(?:\s+" + _CONNECTORS + r"\s+" + _WORD + r"|\s+" + _WORD + r")*\s+"
-    + r"(?:" + "|".join(ORGANIZATION_SUFFIXES) + r")"
-    + r"(?:\s+" + _CONNECTORS + r"\s+" + _WORD + r"|\s+" + _WORD + r")*)"
+    r"\b((?:University\s+of\s+" + _WORD
+    + r"(?:\s+(?:" + _CONNECTORS + r"\s+)?" + _WORD + r")*|"
+    + _WORD + r"(?:\s+(?:" + _CONNECTORS + r"\s+)?" + _WORD + r")*\s+"
+    + _SCHOOL_SUFFIX
+    + r"(?:\s+(?:" + _CONNECTORS + r"\s+)?" + _WORD + r")*))"
 )
 
 DEGREE_RE = re.compile(
@@ -82,8 +114,36 @@ NON_EMPLOYER_MARKERS = (
     "consulting (own practice)",
     "various",
     "unknown",
+    # Common non-employer fragments that appear after achievement verbs or as
+    # continuation headings in real resume exports.
+    "learning materials", "implementation plans", "self service documentation",
+    "job interviews", "soft skills training", "candidate screening",
+    "skills assessment", "launch preparation", "stakeholder coordination",
+    "vendor selection", "post training evaluation", "tools", "documentation",
 )
 
+
+EMPLOYMENT_SENTENCE_STARTS = (
+    "assisted", "built", "conducted", "created", "delivered", "designed", "developed",
+    "drove", "founded", "handled", "improved", "implemented", "launched", "led",
+    "managed", "owned", "partnered", "supported", "translated", "worked", "served",
+    "coordinated", "contributed", "oversaw", "organized", "published", "researched",
+)
+
+LOCATION_MARKERS = {
+    "remote", "onsite", "on site", "hybrid", "new york", "new york city", "san francisco",
+    "los angeles", "seattle", "boston", "chicago", "toronto", "london", "berlin",
+    "lisbon", "jakarta", "medan", "bengaluru", "india", "indonesia", "canada", "usa",
+    "united states", "united kingdom", "eu", "europe",
+}
+
+ROLE_TERMS = (
+    "engineer", "engineering", "developer", "development", "scientist", "researcher",
+    "research", "designer", "design", "manager", "director", "head", "lead", "chief",
+    "officer", "founder", "intern", "associate", "analyst", "architect", "coordinator",
+    "specialist", "recruiter", "operations", "people", "talent", "sales", "marketing",
+    "product", "finance", "legal", "support", "consultant", "administrator",
+)
 SENIORITY_WORDS = {
     "senior", "staff", "principal", "lead", "junior", "associate", "mid", "entry",
     "intern", "internship", "chief", "vp", "vice", "president", "head", "director",
@@ -141,119 +201,347 @@ def _make_anchor(anchor_type, value, evidence, *, weight=None, generic=False,
         "default_off": bool(default_off),
         "attributes": attributes or {},
         "evidence": evidence,
+        "provenance": dict(evidence.get("provenance") or {}),
     }
     return anchor
 
 
-def _evidence(source, field, line_number, quote):
+def _evidence(source, field, line_number, quote, *, section="other", dialect="plain",
+              source_line_offset=None):
+    line = int(line_number or 0)
+    offset = source_line_offset if source_line_offset is not None else max(line - 1, 0)
+    provenance = {
+        "section": squeeze(section) or "other",
+        "line_offset": offset,
+        "source_line_offset": offset,
+        "dialect": squeeze(dialect) or "plain",
+        "line": line,
+    }
     return {
         "source": source,
         "field": field,
-        "line": line_number,
+        "line": line,
+        "line_offset": offset,
+        "dialect": provenance["dialect"],
         "quote": squeeze(quote),
+        "provenance": provenance,
     }
 
 
-def _section_of(heading):
-    normalized = norm_phrase(heading)
+def _section_label(heading):
+    """Return a section only for a standalone alias label."""
+    normalized = norm_phrase(re.sub(r"[*_`]+", "", str(heading or "")).rstrip(" :"))
     for section, aliases in SECTION_ALIASES.items():
         if normalized in aliases:
             return section
-    for section, aliases in SECTION_ALIASES.items():
-        for alias in aliases:
-            if alias in normalized:
-                return section
+
     return "other"
+
+
+def _section_of(heading):
+    normalized = norm_phrase(re.sub(r"[*_`]+", "", str(heading or "")).rstrip(" :"))
+    for section, aliases in SECTION_ALIASES.items():
+        if normalized in aliases:
+            return section
+    return "other"
+
+
+def _new_section(name, heading="", level=0, heading_alias=False):
+    return {
+        "name": name,
+        "heading": heading,
+        "heading_level": level,
+        "heading_alias": bool(heading_alias),
+        "dialect": "heading_alias" if heading_alias else "heading",
+        "entry_kinds": [],
+        "lines": [],
+        "entries": [],
+    }
+
+
+def _append_entry(section, number, value, kind, *, heading_level=0):
+    value = squeeze(value)
+    if not value:
+        return
+    entry = {
+        "line": number,
+        "line_offset": max(number - 1, 0),
+        "text": value,
+        "kind": kind,
+        "dialect": kind,
+        "heading_level": heading_level,
+    }
+    section["lines"].append((number, value))
+    section["entries"].append(entry)
+    if kind not in section["entry_kinds"]:
+        section["entry_kinds"].append(kind)
+    if len(section["entry_kinds"]) > 1:
+        section["dialect"] = "mixed"
+    elif section.get("heading_alias"):
+        section["dialect"] = "heading_alias"
+    else:
+        section["dialect"] = kind
 
 
 def parse_resume(text):
     """Parse resume text into {name, labeled, sections:[{name, lines:[(n, text)]}]}."""
     name = None
     labeled = {}
+    labeled_lines = {}
     sections = []
-    current = {"name": "profile", "lines": []}
+    current = _new_section("profile")
     for number, raw in enumerate(str(text or "").splitlines(), start=1):
         line = raw.rstrip()
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("#"):
-            heading = stripped.lstrip("#").strip()
-            if name is None and heading:
+            level = len(stripped) - len(stripped.lstrip("#"))
+            heading = stripped[level:].strip()
+            section_name = _section_of(heading)
+            if section_name != "other":
+                current = _new_section(
+                    section_name, heading, level,
+                    heading_alias=norm_phrase(heading) != section_name,
+                )
+                sections.append(current)
+            elif name is None and not sections and level <= 1 and heading:
                 name = heading
-            current = {"name": _section_of(heading), "heading": heading, "lines": []}
-            sections.append(current)
+            else:
+                _append_entry(current, number, heading, "heading", heading_level=level)
             continue
         bullet = stripped.lstrip("-*•").strip()
-        label_match = re.match(r"^([A-Za-z][A-Za-z /]{2,24}):\s*(.+)$", bullet)
+        content = re.sub(r"^(?:[*_])+|(?:[*_])+$", "", bullet).strip()
+        section_name = _section_label(content)
+        if section_name != "other":
+            current = _new_section(section_name, content, 0, heading_alias=True)
+            sections.append(current)
+            continue
+        label_match = re.match(r"^([A-Za-z][A-Za-z /]{2,24}):\s*(.+)$", content)
         if label_match and current["name"] in ("profile", "other"):
-            labeled[label_match.group(1).strip().lower()] = label_match.group(2).strip()
+            label = label_match.group(1).strip().lower()
+            labeled[label] = label_match.group(2).strip()
+            labeled_lines[label] = number
         if name is None and current["name"] == "profile" and not label_match:
-            name = squeeze(bullet) or None
-        current["lines"].append((number, bullet))
-    return {"name": name or "", "labeled": labeled, "sections": sections}
+            name = squeeze(content) or None
+        kind = "bullet" if stripped[:1] in "-*•" else "plain"
+        _append_entry(current, number, content, kind)
+    return {"name": name or "", "labeled": labeled, "labeled_lines": labeled_lines, "sections": sections}
+
+
+def _iter_entries(section):
+    entries = section.get("entries")
+    if entries:
+        return entries
+    return [
+        {"line": number, "line_offset": max(number - 1, 0), "text": line,
+         "kind": "plain", "dialect": "plain", "heading_level": 0}
+        for number, line in section.get("lines", [])
+    ]
+
+
+def _entry_evidence(source, field, section, entry):
+    section_dialect = section.get("dialect", "plain")
+    dialect = section_dialect if section.get("heading_alias") or section_dialect == "mixed" else entry.get("dialect", section_dialect)
+    return _evidence(
+        source, field, entry["line"], entry["text"],
+        section=section.get("name", "other"),
+        dialect=dialect,
+        source_line_offset=entry.get("line_offset"),
+    )
+
+
+DEGREE_PREFIX_RE = re.compile(
+    r"^(?:ph\.?\s*d|m\.?\s*(?:s|sc|eng)|b\.?\s*(?:a|s|sc|eng)|mba|master(?:'s)?|bachelor(?:'s)?)\.?\s+",
+    re.IGNORECASE,
+)
+
+
+def _school_matches(line):
+    candidates = []
+    for expression in (_SCHOOL_PREFIX_RE, _SCHOOL_SUFFIX_RE):
+        for match in expression.finditer(line):
+            candidates.append((match.start(1), -len(match.group(1)), match.group(1)))
+    selected = []
+    occupied = []
+    for start, _negative_length, value in sorted(candidates, key=lambda item: (item[0], item[1])):
+        end = start + len(value)
+        if any(start < right and end > left for left, right in occupied):
+            continue
+        value = squeeze(DEGREE_PREFIX_RE.sub("", value))
+        if not value:
+            continue
+        selected.append(value)
+        occupied.append((start, end))
+    return selected
 
 
 def _extract_school_anchors(section, source, anchors, counters):
-    for number, line in section["lines"]:
-        match = SCHOOL_RE.search(line)
-        school = squeeze(match.group(1)) if match else ""
-        if not school:
-            continue
-        degree = ""
-        program = ""
-        degree_match = DEGREE_RE.search(line)
-        if degree_match:
-            degree = squeeze(degree_match.group(1))
-            program = squeeze(degree_match.group(2)).strip(" ,")
-        generic = norm_phrase(school) in GENERIC_SCHOOL_TOKENS
-        counters["school"] += 1
-        anchors.append(_make_anchor(
-            "school", school, _evidence(source, "resume:education", number, line),
-            weight=GENERIC_SCHOOL_WEIGHT if generic else None,
-            generic=generic, index=counters["school"],
-            attributes={"degree": degree, "program": program},
-        ))
-        if program:
-            counters["program"] += 1
+    for entry in _iter_entries(section):
+        line = entry["text"]
+        for school in _school_matches(line):
+            degree = ""
+            program = ""
+            degree_match = DEGREE_RE.search(line)
+            if degree_match:
+                degree = squeeze(degree_match.group(1))
+                program = squeeze(degree_match.group(2)).strip(" ,")
+            if program and norm_phrase(program) == norm_phrase(school):
+                program = ""
+            generic = norm_phrase(school) in GENERIC_SCHOOL_TOKENS
+            counters["school"] += 1
             anchors.append(_make_anchor(
-                "program", program, _evidence(source, "resume:education", number, line),
-                index=counters["program"],
-                attributes={"degree": degree, "school": school},
+                "school", school, _entry_evidence(source, "resume:education", section, entry),
+                weight=GENERIC_SCHOOL_WEIGHT if generic else None,
+                generic=generic, index=counters["school"],
+                attributes={"degree": degree, "program": program},
             ))
+            if program:
+                counters["program"] += 1
+                anchors.append(_make_anchor(
+                    "program", program, _entry_evidence(source, "resume:education", section, entry),
+                    index=counters["program"],
+                    attributes={"degree": degree, "school": school},
+                ))
+
+
+def _plain_markup(text):
+    return squeeze(re.sub(r"[*_`]+", "", str(text or "")))
+
+
+def _looks_like_role(text):
+    normalized = norm_phrase(text)
+    return any(phrase_present(normalized, term) for term in ROLE_TERMS)
+
+
+def _looks_like_location(text):
+    normalized = norm_phrase(text)
+    return any(phrase_present(normalized, marker) for marker in LOCATION_MARKERS)
+
+
+def _starts_sentence_verb(text):
+    words = tokens(text)
+    return bool(words) and words[0] in EMPLOYMENT_SENTENCE_STARTS
+
+
+def _record_parts(text):
+    return [
+        squeeze(part)
+        for part in re.split(r"\s*(?:\||\s+-\s+|\s+–\s+|\s+—\s+|,)\s*", text)
+        if squeeze(part)
+    ]
+
+
+def _clean_company_candidate(value):
+    value = _plain_markup(value)
+    value = re.sub(r"^(?:company|employer)\s*:\s*", "", value, flags=re.IGNORECASE)
+    value = re.split(r"\s+(?:at|@)\s+", value, maxsplit=1, flags=re.IGNORECASE)[0]
+    value = squeeze(value.strip(" ,;:|–—-"))
+    if "," in value:
+        first, _separator, _rest = value.partition(",")
+        if first and (len(value.split()) > 1 or not _looks_like_location(first)):
+            value = squeeze(first)
+    normalized = norm_phrase(value)
+    if not normalized or not re.search(r"[A-Za-z]", value):
+        return ""
+    if any(normalized == norm_phrase(marker)
+           or normalized.startswith(norm_phrase(marker) + " ")
+           for marker in NON_EMPLOYER_MARKERS):
+        return value
+    if _looks_like_location(value):
+        return ""
+    return value
+
+
+def _employment_record(entry, next_entry=None):
+    text = _plain_markup(entry.get("text", ""))
+    if not text or _starts_sentence_verb(text):
+        return None
+    period = next((part for part in _record_parts(text) if DATE_RE.search(part)), "")
+    kind = entry.get("kind", "plain")
+    if kind == "heading":
+        if period and _looks_like_role(text):
+            return None
+        heading_parts = _record_parts(text)
+        role_first = (
+            len(heading_parts) >= 2
+            and _looks_like_role(heading_parts[0])
+            and not _looks_like_location(heading_parts[1])
+            and not DATE_RE.search(heading_parts[1])
+        )
+        if role_first:
+            base = heading_parts[1]
+        else:
+            base = re.split(r"\s*(?:\||\s+-\s+|\s+–\s+|\s+—\s+)\s*", text, maxsplit=1)[0]
+        company = _clean_company_candidate(base)
+        role = ""
+        if next_entry and next_entry.get("kind") != "heading":
+            next_text = _plain_markup(next_entry.get("text", ""))
+            if _looks_like_role(next_text) and not _starts_sentence_verb(next_text):
+                role = next_text
+                next_period = next((part for part in _record_parts(next_text) if DATE_RE.search(part)), "")
+                period = next_period or period
+        if company:
+            return {"company": company, "role": role, "period": period, "shape": "heading"}
+        return None
+    if text.endswith("."):
+        return None
+    parts = _record_parts(text)
+    if len(parts) < 2:
+        return None
+    non_date = [part for part in parts if not DATE_RE.search(part)]
+    if not non_date:
+        return None
+    if len(non_date) == 1 and _looks_like_role(non_date[0]):
+        return None
+    role = ""
+    if _looks_like_role(non_date[0]) and len(non_date) >= 2:
+        role = non_date[0]
+        company = non_date[1]
+    else:
+        company = non_date[0]
+        if len(non_date) > 1 and _looks_like_role(non_date[1]):
+            role = non_date[1]
+    company = _clean_company_candidate(company)
+    if not company:
+        return None
+    return {"company": company, "role": role, "period": period, "shape": "record"}
 
 
 def _extract_employer_anchors(section, source, anchors, counters, unknowns):
-    for number, line in section["lines"]:
-        segments = [squeeze(part) for part in line.split(",") if squeeze(part)]
-        if len(segments) < 2:
+    entries = _iter_entries(section)
+    for index, entry in enumerate(entries):
+        next_entry = entries[index + 1] if index + 1 < len(entries) else None
+        record = _employment_record(entry, next_entry)
+        if not record:
             continue
-        candidates = [seg for seg in segments if not DATE_RE.search(seg)]
-        if len(candidates) < 2:
-            continue
-        employer = candidates[1]
-        if not re.search(r"[A-Za-z]", employer):
-            continue
-        if norm_phrase(employer) in {norm_phrase(marker) for marker in NON_EMPLOYER_MARKERS}:
+        employer = record["company"]
+        evidence = _entry_evidence(source, "resume:experience", section, entry)
+        if any(norm_phrase(employer) == norm_phrase(marker)
+               or norm_phrase(employer).startswith(norm_phrase(marker) + " ")
+               for marker in NON_EMPLOYER_MARKERS):
             unknowns.append({
                 "anchor_type": "prior_employer",
                 "status": "unknown",
                 "reason": "only self-employment or non-employer text recorded in supplied resume",
-                "evidence": _evidence(source, "resume:experience", number, line),
+                "evidence": evidence,
             })
             continue
-        period = next((seg for seg in segments if DATE_RE.search(seg)), "")
         counters["prior_employer"] += 1
         anchors.append(_make_anchor(
-            "prior_employer", employer,
-            _evidence(source, "resume:experience", number, line),
+            "prior_employer", employer, evidence,
             index=counters["prior_employer"],
-            attributes={"role_observed": candidates[0], "period": period},
+            attributes={
+                "role_observed": record["role"],
+                "period": record["period"],
+                "record_shape": record["shape"],
+            },
         ))
 
 
 def _extract_community_anchors(section, source, anchors, counters):
-    for number, line in section["lines"]:
+    for entry in _iter_entries(section):
+        line = entry["text"]
         parts = [squeeze(part) for part in line.split(",") if squeeze(part)]
         value = parts[1] if len(parts) > 1 else parts[0] if parts else ""
         detail = ""
@@ -265,21 +553,22 @@ def _extract_community_anchors(section, source, anchors, counters):
             continue
         counters["rare_community"] += 1
         anchors.append(_make_anchor(
-            "rare_community", value, _evidence(source, "resume:community", number, line),
+            "rare_community", value, _entry_evidence(source, "resume:community", section, entry),
             index=counters["rare_community"],
             attributes={"role_observed": parts[0] if len(parts) > 1 else "", "detail": detail},
         ))
 
 
 def _extract_skill_anchors(section, source, anchors, counters):
-    for number, line in section["lines"]:
+    for entry in _iter_entries(section):
+        line = entry["text"]
         for item in re.split(r"[,;|/]", line):
             value = squeeze(item)
             if not value or not re.search(r"[A-Za-z]", value):
                 continue
             counters["skill"] += 1
             anchors.append(_make_anchor(
-                "skill", value, _evidence(source, "resume:skills", number, line),
+                "skill", value, _entry_evidence(source, "resume:skills", section, entry),
                 generic=norm_phrase(value) in GENERIC_SKILLS,
                 used_in_ranking=False, default_off=True, index=counters["skill"],
                 attributes={"generic_skill": norm_phrase(value) in GENERIC_SKILLS},
@@ -300,7 +589,7 @@ def _function_anchors(job, source, anchors, counters):
     if phrase:
         counters["function"] += 1
         anchors.append(_make_anchor(
-            "function", phrase, _evidence(source, "job:title", 0, title),
+            "function", phrase, _evidence(source, "job:title", 0, title, section="target_job", dialect="job_card"),
             index=counters["function"],
             attributes={
                 "role_family": "target role family from supplied job title",
@@ -313,7 +602,7 @@ def _function_anchors(job, source, anchors, counters):
     if department and norm_phrase(department) != norm_phrase(phrase):
         counters["function"] += 1
         anchors.append(_make_anchor(
-            "function", department, _evidence(source, "job:department", 0, department),
+            "function", department, _evidence(source, "job:department", 0, department, section="target_job", dialect="job_card"),
             weight=0.9, index=counters["function"],
             attributes={
                 "role_family": "department keyword from supplied job card",
@@ -324,7 +613,7 @@ def _function_anchors(job, source, anchors, counters):
         ))
     counters["target_employer"] += 1
     anchors.append(_make_anchor(
-        "target_employer", company, _evidence(source, "job:company", 0, company),
+        "target_employer", company, _evidence(source, "job:company", 0, company, section="target_job", dialect="job_card"),
         index=counters["target_employer"],
         attributes={"role": "required_filter_for_peer_packs"},
     ))
@@ -366,34 +655,40 @@ def extract_anchors(resume_text, job, *, resume_source="<supplied resume>",
     anchors = []
     unknowns = []
     counters = {key: 0 for key in WEIGHTS}
-    sections = {section["name"]: section for section in parsed["sections"]}
+    sections = {}
+    for section in parsed["sections"]:
+        sections.setdefault(section["name"], []).append(section)
 
-    if "education" in sections:
-        _extract_school_anchors(sections["education"], resume_source, anchors, counters)
+    if sections.get("education"):
+        for section in sections["education"]:
+            _extract_school_anchors(section, resume_source, anchors, counters)
     else:
         unknowns.append({
             "anchor_type": "school",
             "status": "unknown",
             "reason": "no education section present in supplied resume text",
         })
-    if "experience" in sections:
-        _extract_employer_anchors(sections["experience"], resume_source, anchors, counters, unknowns)
+    if sections.get("experience"):
+        for section in sections["experience"]:
+            _extract_employer_anchors(section, resume_source, anchors, counters, unknowns)
     else:
         unknowns.append({
             "anchor_type": "prior_employer",
             "status": "unknown",
             "reason": "no experience section present in supplied resume text",
         })
-    if "community" in sections:
-        _extract_community_anchors(sections["community"], resume_source, anchors, counters)
+    if sections.get("community"):
+        for section in sections["community"]:
+            _extract_community_anchors(section, resume_source, anchors, counters)
     else:
         unknowns.append({
             "anchor_type": "rare_community",
             "status": "unknown",
             "reason": "no community or open-source section present in supplied resume text",
         })
-    if "skills" in sections:
-        _extract_skill_anchors(sections["skills"], resume_source, anchors, counters)
+    if sections.get("skills"):
+        for section in sections["skills"]:
+            _extract_skill_anchors(section, resume_source, anchors, counters)
     else:
         unknowns.append({
             "anchor_type": "skill",
@@ -406,8 +701,12 @@ def extract_anchors(resume_text, job, *, resume_source="<supplied resume>",
     location = parsed["labeled"].get("location", "")
     if location and counters["location"] == 0:
         counters["location"] += 1
+        location_line = parsed.get("labeled_lines", {}).get("location", 0)
         anchors.append(_make_anchor(
-            "location", location, _evidence(resume_source, "resume:header", 0, location),
+            "location", location, _evidence(
+                resume_source, "resume:header", location_line, location,
+                section="profile", dialect="labeled",
+            ),
             used_in_ranking=False, index=counters["location"],
             attributes={"role": "optional_low_signal_not_required_by_any_pack"},
         ))
@@ -468,7 +767,16 @@ def _dedupe_anchors(anchors):
         prior = seen.get(key)
         if prior is not None:
             extra = prior["attributes"].setdefault("also_observed_at", [])
-            extra.append({"line": anchor["evidence"]["line"], "quote": anchor["evidence"]["quote"]})
+            extra.append({
+                "line": anchor["evidence"]["line"],
+                "line_offset": anchor["evidence"].get("line_offset", 0),
+                "section": anchor.get("provenance", {}).get("section", "other"),
+                "dialect": anchor.get("provenance", {}).get("dialect", "plain"),
+                "quote": anchor["evidence"]["quote"],
+            })
+            prior["attributes"].setdefault("provenance_observations", []).append(
+                dict(anchor.get("provenance") or {})
+            )
             continue
         seen[key] = anchor
         ordered.append(anchor)

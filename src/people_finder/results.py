@@ -71,6 +71,10 @@ def load_supplied_results(source):
                 "snippet": squeeze(row.get("snippet", "")),
                 "rank_in_pack": row.get("rank", row_index + 1),
                 "position": f"pack_results[{index}].results[{row_index}]",
+                # Optional host-supplied provenance is preserved; old fixtures
+                # remain valid because these fields default to empty strings.
+                "source_url": squeeze(row.get("source_url", "")),
+                "observed_at": squeeze(row.get("observed_at", "") or row.get("fetched_at", "")),
             })
         cleaned.append({
             "pack_id": pack_id,
