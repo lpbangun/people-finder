@@ -270,23 +270,58 @@ def _compile_pack(spec, anchors, target):
     return pack, None
 
 
-def _apply_query_budget(packs):
-    """Keep every compiled lane represented while respecting the per-run cap.
+def _query_text_key(query):
+    """Case/whitespace-normalized query identity used before budget allocation."""
+    return squeeze(query).casefold()
 
-    Any query removed by the cap remains visible in the pack's explicit
-    ``queries_skipped`` ledger, so a host can distinguish bounded execution from
-    an accidental omission.
+
+def _apply_query_budget(packs):
+    """Deduplicate and allocate the fixed run budget with a deterministic pack floor.
+
+    Every non-empty compiled pack receives one query before spare capacity is
+    spent by signal priority. Duplicate query text is retained in the explicit
+    skip ledger, so the host can distinguish deduplication from cap pressure.
     """
-    originals = {pack["pack_id"]: list(pack.get("queries", [])) for pack in packs}
-    before = sum(len(rows) for rows in originals.values())
+    raw_by_pack = {pack["pack_id"]: list(pack.get("queries", [])) for pack in packs}
+    unique_by_pack = {pack["pack_id"]: [] for pack in packs}
+    duplicate_skips = {pack["pack_id"]: [] for pack in packs}
+    seen_queries = {}
+
+    for pack in packs:
+        pack_id = pack["pack_id"]
+        for row in raw_by_pack[pack_id]:
+            key = _query_text_key(row.get("query", ""))
+            if key and key in seen_queries:
+                previous_pack_id, previous_row = seen_queries[key]
+                duplicate_skips[pack_id].append({
+                    **row,
+                    "skip_reason": "duplicate query text after case/whitespace normalization",
+                    "skip_reason_code": "duplicate_query_text",
+                    "duplicate_of_pack_id": previous_pack_id,
+                    "duplicate_of_query": previous_row.get("query", ""),
+                })
+                continue
+            if key:
+                seen_queries[key] = (pack_id, row)
+            unique_by_pack[pack_id].append(row)
+
+    raw_before = sum(len(rows) for rows in raw_by_pack.values())
+    deduplicated_before = sum(len(rows) for rows in unique_by_pack.values())
     selected = {pack["pack_id"]: [] for pack in packs}
-    if before <= MAX_QUERIES_PER_RUN:
+
+    if deduplicated_before <= MAX_QUERIES_PER_RUN:
         for pack in packs:
-            selected[pack["pack_id"]] = list(originals[pack["pack_id"]])
+            pack_id = pack["pack_id"]
+            selected[pack_id] = list(unique_by_pack[pack_id])
     else:
+        # The floor is applied before priority extras. There are six declared
+        # packs and the unchanged cap is twelve, so every compiled lane can
+        # retain representation without changing the global route budget.
         for pack in packs:
-            if originals[pack["pack_id"]]:
-                selected[pack["pack_id"]].append(originals[pack["pack_id"]][0])
+            pack_id = pack["pack_id"]
+            if unique_by_pack[pack_id]:
+                selected[pack_id].append(unique_by_pack[pack_id][0])
+
         remaining = MAX_QUERIES_PER_RUN - sum(len(rows) for rows in selected.values())
         priority = {
             pack_id: index for index, pack_id in enumerate(QUERY_ALLOCATION_PRIORITY)
@@ -295,28 +330,38 @@ def _apply_query_budget(packs):
             packs,
             key=lambda pack: (priority.get(pack["pack_id"], len(priority)), pack["pack_id"]),
         )
-        # Spend spare capacity in signal-priority order. Direct role-family
-        # variants can therefore reach sparse roles before lower-tier proxy
-        # variants, while every non-empty lane already has its first query.
+        # Spend spare capacity in signal-priority order after the one-query
+        # floor. This keeps role-family fallbacks useful without starving
+        # shared-stamp, community, or hiring-adjacent packs.
         for pack in ordered_packs:
             pack_id = pack["pack_id"]
             rows = selected[pack_id]
-            while remaining > 0 and len(rows) < len(originals[pack_id]):
-                rows.append(originals[pack_id][len(rows)])
+            while remaining > 0 and len(rows) < len(unique_by_pack[pack_id]):
+                rows.append(unique_by_pack[pack_id][len(rows)])
                 remaining -= 1
+
     for pack in packs:
         pack_id = pack["pack_id"]
         rows = selected[pack_id]
-        skipped = originals[pack_id][len(rows):]
+        cap_skipped = unique_by_pack[pack_id][len(rows):]
+        skipped = list(duplicate_skips[pack_id]) + [
+            {
+                **row,
+                "skip_reason": "per-run query budget cap",
+                "skip_reason_code": "query_budget_cap",
+            }
+            for row in cap_skipped
+        ]
         pack["queries"] = rows
         pack["query"] = rows[0]["query"] if rows else ""
-        pack["anchor_ids"] = sorted({anchor_id for row in rows for anchor_id in row.get("anchor_ids", [])})
-        pack["queries_compiled_before_cap"] = len(originals[pack_id])
-        pack["queries_skipped"] = [
-            {**row, "skip_reason": "per-run query budget cap"}
-            for row in skipped
-        ]
-    return before, sum(len(rows) for rows in selected.values())
+        pack["anchor_ids"] = sorted({
+            anchor_id for row in rows for anchor_id in row.get("anchor_ids", [])
+        })
+        pack["queries_compiled_before_cap"] = len(raw_by_pack[pack_id])
+        pack["queries_deduplicated_before_cap"] = len(unique_by_pack[pack_id])
+        pack["queries_duplicate_skipped"] = len(duplicate_skips[pack_id])
+        pack["queries_skipped"] = skipped
+    return raw_before, sum(len(rows) for rows in selected.values())
 
 
 def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
@@ -348,6 +393,20 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
     ))
     targets = [anchor for anchor in anchors if anchor["type"] == "target_employer"]
     company_observed = targets[0]["evidence"]["quote"] if targets else ""
+    query_skip_reasons = sorted({
+        row.get("skip_reason", "")
+        for pack in packs
+        for row in pack.get("queries_skipped", [])
+        if row.get("skip_reason", "")
+    })
+    queries_deduplicated_before_cap = sum(
+        int(pack.get("queries_deduplicated_before_cap", 0))
+        for pack in packs
+    )
+    queries_duplicate_skipped = sum(
+        int(pack.get("queries_duplicate_skipped", 0))
+        for pack in packs
+    )
 
     document = {
         "schema": SCHEMA_QUERIES,
@@ -362,20 +421,20 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
         "execution": {
             "query_budget": MAX_QUERIES_PER_RUN,
             "queries_compiled_before_cap": query_count_before_cap,
+            "queries_deduplicated_before_cap": queries_deduplicated_before_cap,
             "queries_compiled": query_count,
             "queries_skipped": sum(len(pack.get("queries_skipped", [])) for pack in packs),
-            "query_skip_reason": (
-                "per-run query budget cap"
-                if any(pack.get("queries_skipped") for pack in packs) else None
-            ),
+            "queries_duplicate_skipped": queries_duplicate_skipped,
+            "query_skip_reason": "; ".join(query_skip_reasons) if query_skip_reasons else None,
             "within_query_budget": query_count <= MAX_QUERIES_PER_RUN,
             "query_allocation": {
                 "scope": "global_per_run",
                 "priority": list(QUERY_ALLOCATION_PRIORITY),
                 "fallback_lane": "function_at_target",
                 "fallback_policy": (
-                    "spare capacity reaches role-family variants before lower-tier lanes; "
-                    "all removed rows remain in queries_skipped"
+                    "reserve one query for every non-empty compiled pack, then spend "
+                    "spare capacity on role-family variants before lower-tier lanes; "
+                    "normalized duplicates and cap-removed rows remain in queries_skipped"
                 ),
             },
             "network_calls": 0,
@@ -406,7 +465,8 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
                 "per_anchor_type_per_path": PER_TYPE_PER_PATH_CAP,
                 "queries_per_pack": USER_AGENT_PACKS,
                 "queries_per_pack_policy": (
-                    "default lane size; function_at_target variants use the global run cap"
+                    "default lane size before the global cap; normalized query text is "
+                    "deduplicated and every non-empty pack receives a one-query floor"
                 ),
                 "query_cap_scope": "global_per_run",
                 "queries_per_run": MAX_QUERIES_PER_RUN,

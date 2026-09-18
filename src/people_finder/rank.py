@@ -279,15 +279,26 @@ def _target_evidence(company, record):
         if all(_prior_target_occurrence(normalized, start, company_norm) for start in positions):
             continue
         leading, remainder = split_title(text)
-        in_leading_name = phrase_present(leading, company) and not phrase_present(remainder, company)
+        positional_at_marker = bool(re.search(
+            r"(?:\bat\s+|@\s*)" + re.escape(company) + r"(?=$|[^\w])",
+            text,
+            re.IGNORECASE,
+        ))
+        in_leading_name = (
+            field == "title"
+            and phrase_present(leading, company)
+            and not phrase_present(remainder, company)
+            and phrase_present(hit.get("profile_name", leading), company)
+            and not positional_at_marker
+        )
         if in_leading_name:
             rejected_name_only = True
             continue
-        structured = field == "title" and (leading != text or phrase_present(text, " at "))
+        structured = field == "title" and (leading != text or positional_at_marker)
         if field == "snippet":
             structured = (
                 leading != text
-                or phrase_present(text, " at ")
+                or positional_at_marker
                 or phrase_present(text, " works ")
                 or phrase_present(text, " employee")
                 or phrase_present(text, " current ")
@@ -317,6 +328,105 @@ def _target_evidence(company, record):
             unique.append(row)
     return unique, rejected_name_only
 
+_AGGREGATE_PROFILE_RE = re.compile(
+    r"(?:\.\.\.|…)\s*[A-ZÀ-ÖØ-öø-ÿ][^\n]{0,100}(?:[-–—]|\s+at\s+|\s+@\s+)",
+    re.IGNORECASE,
+)
+
+
+def _candidate_name_present(text, name):
+    """Return whether every meaningful name token occurs in one live segment."""
+    name_tokens = [
+        token.casefold()
+        for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", str(name or ""))
+        if len(token) > 1
+    ]
+    folded = str(text or "").casefold()
+    return bool(name_tokens) and all(token in folded for token in name_tokens)
+
+
+def _target_company_marker_present(text, company):
+    """Check for a positional employer marker in one result segment."""
+    company = squeeze(company)
+    if not company:
+        return False
+    pattern = (
+        r"(?:\bat\s+|@\s*|experience:\s*|experiencia:\s*|[-–—|]\s*)"
+        + re.escape(company)
+        + r"(?=$|[^\w])"
+    )
+    return bool(re.search(pattern, str(text or ""), re.IGNORECASE))
+
+
+def _strict_live_segments(hit):
+    """Return evidence segments for strict co-location checks.
+
+    Ordinary rows are one title/snippet segment. Rows that visibly flatten
+    several profiles are split at provider aggregate separators; evidence from
+    a neighboring profile is never attached to the row URL's lead.
+    """
+    title = squeeze(hit.get("title", hit.get("scoped_title", "")))
+    snippet = squeeze(hit.get("snippet", hit.get("scoped_snippet", "")))
+    raw = "\n".join(part for part in (title, snippet) if part).strip()
+    if not raw:
+        return []
+    if not _AGGREGATE_PROFILE_RE.search(raw):
+        scoped_title = squeeze(hit.get("scoped_title", title))
+        scoped_snippet = squeeze(hit.get("scoped_snippet", snippet))
+        return ["\n".join(part for part in (scoped_title, scoped_snippet) if part).strip()]
+    return [part.strip() for part in re.split(
+        r"(?:\.\.\.|…|\s+·\s+|\s+\|\s+LinkedIn)", raw, flags=re.IGNORECASE
+    ) if part.strip()]
+
+
+def _strict_peer_colocation(target, hit):
+    """Shared predicate for peer eligibility and emitted peer flags.
+
+    A peer is valid only when one supplied result row/segment contains the
+    candidate name, a positional target-company marker, and function/level
+    evidence. The returned evidence is restricted to that same hit so later
+    merging cannot create a cross-row eligibility claim.
+    """
+    target_evidence, name_only = _target_evidence(target.get("company", ""), {"hits": [hit]})
+    function_evidence, _info = _function_level_evidence(target, {"hits": [hit]})
+    profile_name = hit.get("profile_name") or _profile_name(hit.get("scoped_title", ""))
+    acceptable_terms = {
+        str(term)
+        for evidence in function_evidence
+        for term in (
+            evidence.get("role_terms", [])
+            + evidence.get("function_families", [])
+            + evidence.get("level_terms", [])
+        )
+    }
+    if not target_evidence or not function_evidence or not profile_name:
+        return {
+            "passed": False,
+            "name_only_target_match": name_only,
+            "target_company_evidence": target_evidence,
+            "function_evidence": function_evidence,
+            "segments": [],
+        }
+    for segment in _strict_live_segments(hit):
+        if (
+            _candidate_name_present(segment, profile_name)
+            and _target_company_marker_present(segment, target.get("company", ""))
+            and any(phrase_present(segment, term) for term in acceptable_terms)
+        ):
+            return {
+                "passed": True,
+                "name_only_target_match": False,
+                "target_company_evidence": target_evidence,
+                "function_evidence": function_evidence,
+                "segments": [segment],
+            }
+    return {
+        "passed": False,
+        "name_only_target_match": name_only,
+        "target_company_evidence": target_evidence,
+        "function_evidence": function_evidence,
+        "segments": _strict_live_segments(hit),
+    }
 
 def _function_families(text):
     words = set(tokens(text))
@@ -406,6 +516,46 @@ def _record_eligibility(target, record):
     all_text = " ".join(text for _field, text, _hit in _text_fields(record, positional=True))
     levels = [_level_info(text) for _field, text, _hit in _text_fields(record, positional=True)]
     c_suite = any(item["class"] == "c_suite" for item in levels)
+
+    peer_matches = []
+    for hit in record.get("hits", []):
+        if not hit.get("profile_identity_safe", True):
+            continue
+        match = _strict_peer_colocation(target, hit)
+        if match["passed"]:
+            peer_matches.append(match)
+
+    # Evidence from a peer candidate is only taken from a hit that passed the
+    # shared predicate. This prevents later URL merging from manufacturing a
+    # target/function intersection across unrelated live rows.
+    strict_target_evidence = [
+        row
+        for match in peer_matches
+        for row in match["target_company_evidence"]
+    ]
+    strict_function_evidence = [
+        row
+        for match in peer_matches
+        for row in match["function_evidence"]
+    ]
+
+    def unique_rows(rows):
+        unique = []
+        seen = set()
+        for row in rows:
+            key = (
+                row.get("field", ""),
+                row.get("quote", ""),
+                row.get("position", ""),
+                row.get("match_kind", ""),
+            )
+            if key not in seen:
+                seen.add(key)
+                unique.append(row)
+        return unique
+
+    strict_target_evidence = unique_rows(strict_target_evidence)
+    strict_function_evidence = unique_rows(strict_function_evidence)
     base = {
         "status": "ineligible",
         "lane": None,
@@ -415,7 +565,17 @@ def _record_eligibility(target, record):
         "level_evidence": [],
         "rationale": "",
         "c_suite": c_suite,
-        "name_only_target_match": name_only,
+        "name_only_target_match": bool(name_only and not target_evidence),
+        "selection_eligible": False,
+        "co_location": {
+            "status": "passed" if peer_matches else "failed",
+            "live_result_count": len(peer_matches),
+            "positions": sorted({
+                row.get("position", "")
+                for row in strict_target_evidence + strict_function_evidence
+                if row.get("position", "")
+            }),
+        },
     }
     if not target_evidence:
         base["reason_code"] = "name_only_target_match" if name_only else "target_company_evidence_missing"
@@ -426,15 +586,18 @@ def _record_eligibility(target, record):
         base["rationale"] = "Excluded: a C-suite level was observed; executive backfill is outside peer eligibility."
         base["level_evidence"] = [
             {"field": field, "quote": text, "level": "c_suite"}
-            for field, text, _hit in _text_fields(record, positional=True) if _level_info(text)["class"] == "c_suite"
+            for field, text, _hit in _text_fields(record, positional=True)
+            if _level_info(text)["class"] == "c_suite"
         ]
         return base
+
     hiring_terms = _contains_phrase(all_text, HIRING_SURFACE_TERMS)
-    function_evidence, _info = _function_level_evidence(target, record)
     if hiring_terms:
         base["status"] = "eligible"
         base["lane"] = LANE_HIRING_ADJACENT
         base["reason_code"] = "hiring_adjacent"
+        base["selection_eligible"] = True
+        base["name_only_target_match"] = False
         base["function_evidence"] = [
             {
                 "field": field, "quote": text, "surface_terms": hiring_terms,
@@ -455,22 +618,31 @@ def _record_eligibility(target, record):
         ]
         base["rationale"] = "Eligible in the hiring-adjacent lane: current target-company evidence and a hiring surface are both observed; it cannot reorder peer leads."
         return base
-    if not function_evidence:
+
+    if not peer_matches:
         base["reason_code"] = "wrong_function_or_level"
-        base["rationale"] = "Excluded: current target-company evidence is present, but no same-function peer or relevant function-head evidence was observed."
+        base["rationale"] = (
+            "Excluded: no single live result segment co-located the candidate name, "
+            "current target-company marker, and same-function or level evidence."
+        )
         return base
+
     base["status"] = "eligible"
     base["lane"] = LANE_PEER
-    base["reason_code"] = function_evidence[0]["match_kind"]
-    base["function_evidence"] = function_evidence
+    base["reason_code"] = strict_function_evidence[0]["match_kind"]
+    base["target_company_evidence"] = strict_target_evidence
+    base["function_evidence"] = strict_function_evidence
     base["level_evidence"] = [
         {"field": row["field"], "quote": row["quote"], "level": row["level"],
          "level_terms": row["level_terms"]}
-        for row in function_evidence
+        for row in strict_function_evidence
     ]
+    base["selection_eligible"] = True
+    base["name_only_target_match"] = False
     base["rationale"] = (
-        "Eligible as a same-function peer or relevant function head: current target-company "
-        "attribution, function evidence, and observed role level are all cited below."
+        "Eligible as a same-function peer or relevant function head: one live result "
+        "segment co-locates the candidate name, current target-company attribution, "
+        "function evidence, and observed role level."
     )
     return base
 
@@ -790,7 +962,8 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
     candidates = []
     for url_key, record in merged.items():
         eligibility = _record_eligibility(target, record)
-        if eligibility["status"] != "eligible":
+        if (eligibility["status"] != "eligible"
+                or (eligibility["lane"] == LANE_PEER and eligibility["selection_eligible"] is not True)):
             observed_positions = sorted({hit["position"] for hit in record["hits"]})
             observed_packs = sorted({hit["pack_id"] for hit in record["hits"]})
             observed_url = record["hits"][0]["url_observed"] if record["hits"] else url_key
@@ -883,7 +1056,7 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
                 "evidence": target_evidence,
             },
             "observed_at_target": observed_at_target,
-            "selection_eligible": True,
+            "selection_eligible": bool(eligibility["selection_eligible"]),
             "eligibility": eligibility,
             "function_level_rationale": eligibility["rationale"],
             "function_level": {
