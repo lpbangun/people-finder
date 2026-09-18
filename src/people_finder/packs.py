@@ -169,13 +169,29 @@ def _compile_pack(spec, anchors, target):
                 "no anchor of the required types was extracted from the supplied inputs",
                 missing_anchor_types=spec["match_anchor_types"],
             )
-        for anchor in matched[:USER_AGENT_PACKS]:
-            queries.append({
-                "query": _query_for(anchor["value"], company) if spec["requires_target_employer"]
-                else _query_for(anchor["value"]),
-                "anchor_ids": [anchor["anchor_id"]],
-            })
-            used.append(anchor["anchor_id"])
+        matched = matched[:USER_AGENT_PACKS]
+        for anchor_index, anchor in enumerate(matched):
+            # Reserve one query for every remaining anchor so a title variant
+            # cannot starve the department/function anchor from this pack.
+            remaining_anchor_count = len(matched) - anchor_index - 1
+            available = max(1, USER_AGENT_PACKS - len(queries) - remaining_anchor_count)
+            values = [anchor["value"]]
+            if spec["pack_id"] == "function_at_target":
+                values = list(anchor.get("attributes", {}).get("query_variants", [])) + values
+            deduped_values = []
+            seen_values = set()
+            for value in values:
+                normalized = norm_phrase(value)
+                if normalized and normalized not in seen_values:
+                    seen_values.add(normalized)
+                    deduped_values.append(value)
+            for value in deduped_values[:available]:
+                queries.append({
+                    "query": _query_for(value, company) if spec["requires_target_employer"]
+                    else _query_for(value),
+                    "anchor_ids": [anchor["anchor_id"]],
+                })
+                used.append(anchor["anchor_id"])
 
     if not queries:
         return _skip_pack(

@@ -150,6 +150,29 @@ SENIORITY_WORDS = {
     "ii", "iii", "iv", "sr", "jr",
 }
 
+# These are query-language variants, not additional seeker facts. They let a
+# job title such as ``People Ops Manager`` reach the same public role family as
+# ``People Operations Manager`` without changing the evidence-backed anchor
+# value. The reverse forms are useful because public profile headlines often
+# abbreviate a long role name even when the posting does not.
+FUNCTION_QUERY_EXPANSIONS = (
+    ("rev ops", "revenue operations"),
+    ("revops", "revenue operations"),
+    ("gtm", "go to market"),
+    ("ops", "operations"),
+    ("hr", "human resources"),
+)
+FUNCTION_QUERY_COMPACTIONS = (
+    ("human resources", "hr"),
+    ("revenue operations", "revops"),
+    ("go to market", "gtm"),
+    ("operations", "ops"),
+    ("representative", "rep"),
+)
+TITLE_LEVEL_WORDS = SENIORITY_WORDS | {
+    "manager", "coordinator", "specialist", "analyst", "representative", "officer",
+}
+
 FUNCTION_STOPWORDS = {"and", "of", "the", "for", "a", "an", "to", "in", "with"}
 
 GENERIC_SKILLS = {
@@ -575,6 +598,76 @@ def _extract_skill_anchors(section, source, anchors, counters):
             ))
 
 
+def _replace_function_terms(value, replacements):
+    result = squeeze(value)
+    for source, replacement in replacements:
+        result = re.sub(
+            r"(?<![A-Za-z])" + re.escape(source) + r"(?![A-Za-z])",
+            replacement,
+            result,
+            flags=re.IGNORECASE,
+        )
+    return squeeze(result)
+
+
+def _title_function_phrase(value):
+    return " ".join(
+        word for word in re.findall(r"[A-Za-z][A-Za-z+.#\-]*", squeeze(value))
+        if norm_phrase(word) not in SENIORITY_WORDS
+    )
+
+
+def _function_query_variants(title, phrase):
+    """Return at most two broad, deterministic variants for a job title.
+
+    The canonical anchor remains the exact job-title evidence. Variants only
+    remove a trailing specialization or translate common title abbreviations,
+    which makes public-index retrieval resilient to title formatting while
+    leaving ranking and eligibility evidence-backed.
+    """
+    raw_title = squeeze(title)
+    parts = re.split(r"\s*(?:[,;:]|\(|\[|\s+[–—-]\s+)\s*", raw_title, maxsplit=1)
+    prefix = _title_function_phrase(parts[0])
+    suffix = _title_function_phrase(parts[1]) if len(parts) > 1 else ""
+    prefix_tokens = [token for token in tokens(parts[0]) if token not in FUNCTION_STOPWORDS]
+    prefix_level_only = bool(prefix_tokens) and all(
+        token in TITLE_LEVEL_WORDS for token in prefix_tokens
+    )
+
+    variants = []
+    seen = set()
+
+    def add(value):
+        value = squeeze(value)
+        normalized = norm_phrase(value)
+        if not value or normalized == norm_phrase(phrase) or normalized in seen:
+            return
+        seen.add(normalized)
+        variants.append(value)
+
+    def add_forms(value):
+        expanded = _replace_function_terms(value, FUNCTION_QUERY_EXPANSIONS)
+        if norm_phrase(expanded) != norm_phrase(value):
+            add(expanded)
+        add(value)
+        compacted = _replace_function_terms(value, FUNCTION_QUERY_COMPACTIONS)
+        if norm_phrase(compacted) != norm_phrase(value):
+            add(compacted)
+
+    # A prefix with a real function stem is the stable role-family query for
+    # titles like "Sales Development Representative, Early Stage".
+    if prefix and (not suffix or len(tokens(prefix)) >= 2):
+        add_forms(prefix)
+    # For titles shaped like "Manager, Customer Success", put the function
+    # before the level token so the query matches normal public headlines.
+    if suffix and (not prefix or prefix_level_only):
+        add_forms(squeeze(f"{suffix} {prefix}"))
+    # Preserve a compacted/expanded form of the full title when it is the only
+    # useful variant. The canonical anchor value is appended by pack compiler.
+    add_forms(phrase)
+    return variants[:2]
+
+
 def _function_anchors(job, source, anchors, counters):
     title = squeeze(job.get("title", ""))
     company = squeeze(job.get("company", ""))
@@ -595,6 +688,11 @@ def _function_anchors(job, source, anchors, counters):
                 "role_family": "target role family from supplied job title",
                 "match_scope": "title_or_snippet",
                 "terms": [tok for tok in tokens(phrase) if tok not in FUNCTION_STOPWORDS],
+                "query_variants": _function_query_variants(title, phrase),
+                "query_variant_policy": (
+                    "bounded role-family variants derived from the supplied title; they do not "
+                    "create a new seeker fact"
+                ),
                 "seniority_stripped": [w for w in re.findall(r"[A-Za-z]+", title)
                                        if norm_phrase(w) in SENIORITY_WORDS],
             },

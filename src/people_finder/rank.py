@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timezone
 
 from . import SCHEMA_CANDIDATES, SCHEMA_QUERIES, SCHEMA_SERP
-from .anchors import HIRING_ADJACENT_TERMS, RESTRICTED_ANCHOR_TYPES
+from .anchors import (FUNCTION_STOPWORDS, HIRING_ADJACENT_TERMS, RESTRICTED_ANCHOR_TYPES)
 from .packs import HIRING_ADJACENT_TERM_WEIGHT, PER_PATH_TOTAL_CAP, PER_TYPE_PER_PATH_CAP
 from .results import ResultError
 from .textutil import (all_terms_present, find_span, is_public_profile_url,
@@ -64,6 +64,7 @@ LEVEL_TERMS = {
     "head", "director", "vp", "vice president", "manager", "lead", "principal", "staff",
     "senior", "sr", "junior", "jr", "associate", "coordinator", "specialist", "analyst",
     "engineer", "developer", "scientist", "researcher", "designer", "recruiter",
+    "representative", "rep", "sdr", "bdr",
 }
 LEVEL_STOPWORDS = {"and", "of", "the", "for", "a", "an", "to", "in", "with"}
 FUNCTION_FAMILIES = {
@@ -74,7 +75,8 @@ FUNCTION_FAMILIES = {
     "product": {"product", "pm", "roadmap", "productmanager"},
     "design": {"design", "designer", "ux", "ui", "creative"},
     "go_to_market": {"gtm", "sales", "revenue", "account", "accounts", "business", "development",
-                      "partnerships", "partnership", "growth", "marketing", "demand", "brand"},
+                      "partnerships", "partnership", "growth", "marketing", "demand", "brand",
+                      "representative", "rep", "sdr", "bdr"},
     "people": {"people", "hr", "human", "resources", "talent", "recruiting", "recruitment",
                "learning", "organizational", "organization", "workplace", "employee"},
     "operations": {"operations", "operation", "ops", "program", "strategy", "workplace"},
@@ -339,26 +341,42 @@ def _match_anchor(anchor, title, snippet, slug_text):
 
     A department-derived function anchor is only counted when a result title
     carries it: a short department phrase inside a snippet is not role evidence.
+    Role-family query variants are aliases of the same supplied job-title
+    anchor; they never add a new seeker fact.
     """
-    scope = anchor.get("attributes", {}).get("match_scope", "title_or_snippet")
+    attributes = anchor.get("attributes", {})
+    scope = attributes.get("match_scope", "title_or_snippet")
+    values = [anchor["value"]] + list(attributes.get("query_variants", []))
     observed = []
-    if scope in ("title", "title_or_snippet") and phrase_present(title, anchor["value"]):
-        observed.append("title")
-    if scope in ("snippet", "title_or_snippet") and phrase_present(snippet, anchor["value"]):
-        observed.append("snippet")
-    if scope != "title" and slug_text and phrase_present(slug_text, anchor["value"]):
-        observed.append("url")
+    seen_values = set()
+    for value in values:
+        normalized = norm_phrase(value)
+        if not normalized or normalized in seen_values:
+            continue
+        seen_values.add(normalized)
+        if scope in ("title", "title_or_snippet") and phrase_present(title, value):
+            observed.append("title")
+        if scope in ("snippet", "title_or_snippet") and phrase_present(snippet, value):
+            observed.append("snippet")
+        if scope != "title" and slug_text and phrase_present(slug_text, value):
+            observed.append("url")
     if observed:
-        return observed
+        return sorted(set(observed))
     if anchor["type"] == "function":
-        terms = anchor.get("attributes", {}).get("terms") or []
-        if not terms:
-            return []
-        # The all-terms fallback must be satisfied inside one observed field.
-        if scope in ("title", "title_or_snippet") and all_terms_present(title, terms):
-            return ["title:function_terms"]
-        if scope in ("snippet", "title_or_snippet") and all_terms_present(snippet, terms):
-            return ["snippet:function_terms"]
+        term_sets = []
+        canonical_terms = attributes.get("terms") or []
+        if canonical_terms:
+            term_sets.append(canonical_terms)
+        for value in attributes.get("query_variants", []):
+            variant_terms = [term for term in tokens(value) if term not in FUNCTION_STOPWORDS]
+            if variant_terms:
+                term_sets.append(variant_terms)
+        for terms in term_sets:
+            # The all-terms fallback must be satisfied inside one observed field.
+            if scope in ("title", "title_or_snippet") and all_terms_present(title, terms):
+                return ["title:function_terms"]
+            if scope in ("snippet", "title_or_snippet") and all_terms_present(snippet, terms):
+                return ["snippet:function_terms"]
     return []
 
 
