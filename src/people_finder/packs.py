@@ -180,15 +180,36 @@ def _compile_pack(spec, anchors, target):
                 "no anchor of the required types was extracted from the supplied inputs",
                 missing_anchor_types=spec["match_anchor_types"],
             )
-        matched = matched[:USER_AGENT_PACKS]
+        function_pack = spec["pack_id"] == "function_at_target"
+        # Function retrieval is the bounded fallback lane. It may contribute
+        # more than the default three rows before the global cap is applied,
+        # because a provider can return zero rows or raise on a useful-looking
+        # variant. Other packs retain their three-query lane cap.
+        matched = matched[:MAX_QUERIES_PER_RUN if function_pack else USER_AGENT_PACKS]
         for anchor_index, anchor in enumerate(matched):
-            # Reserve one query for every remaining anchor so a title variant
-            # cannot starve the department/function anchor from this pack.
-            remaining_anchor_count = len(matched) - anchor_index - 1
-            available = max(1, USER_AGENT_PACKS - len(queries) - remaining_anchor_count)
+            if function_pack:
+                available = max(0, MAX_QUERIES_PER_RUN - len(queries))
+            else:
+                # Reserve one query for every remaining anchor so a title
+                # variant cannot starve the next stamp anchor from this pack.
+                remaining_anchor_count = len(matched) - anchor_index - 1
+                available = max(1, USER_AGENT_PACKS - len(queries) - remaining_anchor_count)
             values = [anchor["value"]]
-            if spec["pack_id"] == "function_at_target":
-                values = list(anchor.get("attributes", {}).get("query_variants", [])) + values
+            if function_pack:
+                variants = list(anchor.get("attributes", {}).get("query_variants", []))
+                preferred = [
+                    value for value in variants
+                    if len(norm_phrase(value).split()) > 1
+                    or not str(value).strip().isupper()
+                ]
+                abbreviated = [
+                    value for value in variants
+                    if value not in preferred
+                ]
+                # Multi-word role-family forms are useful first; the canonical
+                # supplied role follows them, and a one-token initialism is a
+                # bounded fallback rather than the first route.
+                values = preferred + values + abbreviated
             deduped_values = []
             seen_values = set()
             for value in values:
@@ -196,13 +217,23 @@ def _compile_pack(spec, anchors, target):
                 if normalized and normalized not in seen_values:
                     seen_values.add(normalized)
                     deduped_values.append(value)
-            for value in deduped_values[:available]:
-                queries.append({
+            for value_index, value in enumerate(deduped_values[:available]):
+                row = {
                     "query": _query_for(value, company) if spec["requires_target_employer"]
                     else _query_for(value),
                     "anchor_ids": [anchor["anchor_id"]],
-                })
+                }
+                if function_pack:
+                    row["query_kind"] = (
+                        "role_family_canonical"
+                        if norm_phrase(value) == norm_phrase(anchor["value"])
+                        else "role_family_variant"
+                    )
+                    row["variant_rank"] = value_index
+                queries.append(row)
                 used.append(anchor["anchor_id"])
+            if function_pack and len(queries) >= MAX_QUERIES_PER_RUN:
+                break
 
     if not queries:
         return _skip_pack(
@@ -305,6 +336,16 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
             skipped.append(skip)
 
     query_count_before_cap, query_count = _apply_query_budget(packs)
+    priority = {
+        pack_id: index for index, pack_id in enumerate(QUERY_ALLOCATION_PRIORITY)
+    }
+    # The host executes the compiled pack list in order. Put the same
+    # high-signal lanes first so provider exceptions or a wall-clock stop do
+    # not consume the run before role-family fallbacks are attempted.
+    packs.sort(key=lambda pack: (
+        priority.get(pack["pack_id"], len(priority)),
+        pack["pack_id"],
+    ))
     targets = [anchor for anchor in anchors if anchor["type"] == "target_employer"]
     company_observed = targets[0]["evidence"]["quote"] if targets else ""
 
@@ -328,6 +369,15 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
                 if any(pack.get("queries_skipped") for pack in packs) else None
             ),
             "within_query_budget": query_count <= MAX_QUERIES_PER_RUN,
+            "query_allocation": {
+                "scope": "global_per_run",
+                "priority": list(QUERY_ALLOCATION_PRIORITY),
+                "fallback_lane": "function_at_target",
+                "fallback_policy": (
+                    "spare capacity reaches role-family variants before lower-tier lanes; "
+                    "all removed rows remain in queries_skipped"
+                ),
+            },
             "network_calls": 0,
             "retry_count": 0,
             "terminal_route_failure": None,
@@ -355,6 +405,10 @@ def compile_packs(resume_text, job, *, resume_source="<supplied resume>",
                 "per_path_total": PER_PATH_TOTAL_CAP,
                 "per_anchor_type_per_path": PER_TYPE_PER_PATH_CAP,
                 "queries_per_pack": USER_AGENT_PACKS,
+                "queries_per_pack_policy": (
+                    "default lane size; function_at_target variants use the global run cap"
+                ),
+                "query_cap_scope": "global_per_run",
                 "queries_per_run": MAX_QUERIES_PER_RUN,
             },
             "required_filter": (

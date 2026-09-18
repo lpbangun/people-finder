@@ -169,6 +169,34 @@ FUNCTION_QUERY_COMPACTIONS = (
     ("operations", "ops"),
     ("representative", "rep"),
 )
+# Public profile headlines often use a short initialism for a longer function
+# phrase. These are query-language aliases only: ranking still needs the
+# observed company and positional function/level evidence before a lead is
+# eligible. Keep the set deliberately small and deterministic so this is a
+# bounded recall aid rather than an ontology or a guessed fact.
+FUNCTION_INITIALISM_EXPANSIONS = (
+    ("ux", "user experience"),
+    ("ui", "user interface"),
+    ("ml", "machine learning"),
+    ("ai", "artificial intelligence"),
+    ("it", "information technology"),
+    ("gtm", "go to market"),
+    ("ops", "operations"),
+    ("hr", "human resources"),
+    ("cs", "customer success"),
+    ("cx", "customer experience"),
+    ("sdr", "sales development representative"),
+)
+FUNCTION_PHRASE_REWRITES = (
+    ("people ops", "people operations"),
+    ("people operations", "human resources operations"),
+    ("user research", "ux research"),
+    ("user experience", "ux"),
+)
+# This is a per-anchor candidate limit before the global run budget is
+# applied. It prevents an unusual title from producing an unbounded plan;
+# MAX_QUERIES_PER_RUN in packs.py remains the only host execution cap.
+FUNCTION_QUERY_VARIANT_LIMIT = 8
 TITLE_LEVEL_WORDS = SENIORITY_WORDS | {
     "manager", "coordinator", "specialist", "analyst", "representative", "officer",
 }
@@ -618,12 +646,13 @@ def _title_function_phrase(value):
 
 
 def _function_query_variants(title, phrase):
-    """Return at most two broad, deterministic variants for a job title.
+    """Return bounded, deterministic role-family aliases for a job title.
 
     The canonical anchor remains the exact job-title evidence. Variants only
-    remove a trailing specialization or translate common title abbreviations,
-    which makes public-index retrieval resilient to title formatting while
-    leaving ranking and eligibility evidence-backed.
+    remove a trailing specialization or level word, translate common title
+    abbreviations, and add a conservative initialism. This makes public-index
+    retrieval resilient to title formatting and provider zero-yield variants
+    while leaving ranking and eligibility evidence-backed.
     """
     raw_title = squeeze(title)
     parts = re.split(r"\s*(?:[,;:]|\(|\[|\s+[–—-]\s+)\s*", raw_title, maxsplit=1)
@@ -645,14 +674,40 @@ def _function_query_variants(title, phrase):
         seen.add(normalized)
         variants.append(value)
 
+    def add_rewrite(value, replacements):
+        rewritten = _replace_function_terms(value, replacements)
+        if norm_phrase(rewritten) != norm_phrase(value):
+            add(rewritten)
+
+    def add_initialism_forms(value):
+        for source, replacement in FUNCTION_INITIALISM_EXPANSIONS:
+            add_rewrite(value, ((source, replacement),))
+        for source, replacement in FUNCTION_PHRASE_REWRITES:
+            add_rewrite(value, ((source, replacement),))
+
+        words = [word for word in re.findall(r"[A-Za-z][A-Za-z+.#\-]*", value)
+                 if norm_phrase(word) not in FUNCTION_STOPWORDS]
+        if len(words) >= 2 and all(len(word) > 1 for word in words):
+            acronym = "".join(word[0] for word in words).upper()
+            if 2 <= len(acronym) <= 6:
+                add(acronym)
+
     def add_forms(value):
-        expanded = _replace_function_terms(value, FUNCTION_QUERY_EXPANSIONS)
-        if norm_phrase(expanded) != norm_phrase(value):
-            add(expanded)
+        add_rewrite(value, FUNCTION_QUERY_EXPANSIONS)
         add(value)
-        compacted = _replace_function_terms(value, FUNCTION_QUERY_COMPACTIONS)
-        if norm_phrase(compacted) != norm_phrase(value):
-            add(compacted)
+        add_rewrite(value, FUNCTION_QUERY_COMPACTIONS)
+        add_initialism_forms(value)
+
+        # A provider may index the family without the trailing level token.
+        # Keep at least two meaningful terms so a level-only or one-word query
+        # cannot consume the bounded plan with a generic search.
+        words = [word for word in re.findall(r"[A-Za-z][A-Za-z+.#\-]*", value)
+                 if norm_phrase(word) not in FUNCTION_STOPWORDS]
+        if len(words) >= 3 and norm_phrase(words[-1]) in TITLE_LEVEL_WORDS | {
+            "engineer", "developer", "scientist", "researcher", "designer",
+            "architect", "administrator", "consultant",
+        }:
+            add(" ".join(words[:-1]))
 
     # A prefix with a real function stem is the stable role-family query for
     # titles like "Sales Development Representative, Early Stage".
@@ -665,7 +720,7 @@ def _function_query_variants(title, phrase):
     # Preserve a compacted/expanded form of the full title when it is the only
     # useful variant. The canonical anchor value is appended by pack compiler.
     add_forms(phrase)
-    return variants[:2]
+    return variants[:FUNCTION_QUERY_VARIANT_LIMIT]
 
 
 def _function_anchors(job, source, anchors, counters):
@@ -705,6 +760,11 @@ def _function_anchors(job, source, anchors, counters):
             attributes={
                 "role_family": "department keyword from supplied job card",
                 "match_scope": "title",
+                "query_variants": _function_query_variants(department, department),
+                "query_variant_policy": (
+                    "bounded aliases derived from the supplied department; they do not "
+                    "create a new seeker fact"
+                ),
                 "why": ("a short department phrase matched inside a snippet is not role "
                         "evidence, so it only counts when a supplied result title carries it"),
             },
