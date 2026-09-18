@@ -15,6 +15,17 @@ from .textutil import norm_phrase, squeeze
 
 USER_AGENT_PACKS = 3          # queries emitted per pack
 MAX_QUERIES_PER_RUN = 12    # bounded host route budget per role
+# Within the fixed budget, direct role-family retrieval gets the next available
+# variant before the lower-tier public-stamp proxy. This is a general signal
+# priority, not a role/company-specific query injection.
+QUERY_ALLOCATION_PRIORITY = (
+    "function_at_target",
+    "alumni_at_target",
+    "prior_employer_at_target",
+    "community_at_target",
+    "hiring_adjacent",
+    "shared_stamp",
+)
 PER_PATH_TOTAL_CAP = 12.0
 PER_TYPE_PER_PATH_CAP = 2
 HIRING_ADJACENT_TERM_WEIGHT = 0.5   # per matched hiring-adjacent lexicon term
@@ -246,19 +257,22 @@ def _apply_query_budget(packs):
             if originals[pack["pack_id"]]:
                 selected[pack["pack_id"]].append(originals[pack["pack_id"]][0])
         remaining = MAX_QUERIES_PER_RUN - sum(len(rows) for rows in selected.values())
-        while remaining > 0:
-            progressed = False
-            for pack in packs:
-                pack_id = pack["pack_id"]
-                rows = selected[pack_id]
-                if len(rows) < len(originals[pack_id]):
-                    rows.append(originals[pack_id][len(rows)])
-                    remaining -= 1
-                    progressed = True
-                    if remaining == 0:
-                        break
-            if not progressed:
-                break
+        priority = {
+            pack_id: index for index, pack_id in enumerate(QUERY_ALLOCATION_PRIORITY)
+        }
+        ordered_packs = sorted(
+            packs,
+            key=lambda pack: (priority.get(pack["pack_id"], len(priority)), pack["pack_id"]),
+        )
+        # Spend spare capacity in signal-priority order. Direct role-family
+        # variants can therefore reach sparse roles before lower-tier proxy
+        # variants, while every non-empty lane already has its first query.
+        for pack in ordered_packs:
+            pack_id = pack["pack_id"]
+            rows = selected[pack_id]
+            while remaining > 0 and len(rows) < len(originals[pack_id]):
+                rows.append(originals[pack_id][len(rows)])
+                remaining -= 1
     for pack in packs:
         pack_id = pack["pack_id"]
         rows = selected[pack_id]

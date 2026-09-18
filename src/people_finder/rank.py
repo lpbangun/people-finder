@@ -87,14 +87,162 @@ FUNCTION_FAMILIES = {
 HIRING_SURFACE_TERMS = tuple(dict.fromkeys((*HIRING_ADJACENT_TERMS, "recruiting", "recruitment", "sourcer")))
 
 
-def _text_fields(record):
+_PROFILE_MARKER_RE = re.compile(r"linkedin", re.IGNORECASE)
+_PROFILE_VIEW_RE = re.compile(
+    r"\bview\s+[^.!?\n]{0,120}?\s+profile\s+on\s+linkedin\b",
+    re.IGNORECASE,
+)
+_PROFILE_LABEL_RE = re.compile(
+    r"\b(?:experience|education|employment|work\s+experience|professional\s+experience)\s*:",
+    re.IGNORECASE,
+)
+_PROFILE_EXPERIENCE_RE = re.compile(r"\bexperience\s*:", re.IGNORECASE)
+
+
+def _profile_boundary_matches(text):
+    """Find generic provider profile boundaries in a concatenated title.
+
+    Search providers sometimes flatten several result cards into one title, for
+    example ``Name - Company | LinkedInOther Name - Company | LinkedIn``.  The
+    marker is deliberately structural rather than provider- or company-specific:
+    it must be preceded by a title separator and followed by another profile
+    name.  A trailing `| LinkedIn` is therefore retained as an ordinary title
+    suffix.
+    """
+    text = str(text or "")
+    matches = []
+    for match in _PROFILE_MARKER_RE.finditer(text):
+        before = text[:match.start()].rstrip()
+        after = text[match.end():].lstrip(" |·")
+        if not before or before[-1] not in "|·-–—":
+            continue
+        if after and re.match(r"[^\W\d_]", after, re.UNICODE):
+            matches.append(match)
+    return matches
+
+
+def _clean_profile_title_segment(text):
+    text = squeeze(text).strip(" |·")
+    text = re.sub(r"(?:\s*[|·]\s*)?linkedin\s*$", "", text, flags=re.IGNORECASE)
+    return squeeze(text).strip(" |·")
+
+
+def _profile_title_segments(title):
+    """Return title cards in order, preserving the first card as the row lead."""
+    text = squeeze(title)
+    if not text:
+        return []
+    segments = []
+    cursor = 0
+    for match in _profile_boundary_matches(text):
+        segment = _clean_profile_title_segment(text[cursor:match.start()])
+        if segment:
+            segments.append(segment)
+        cursor = match.end()
+    tail = _clean_profile_title_segment(text[cursor:])
+    if tail:
+        segments.append(tail)
+    return segments or [_clean_profile_title_segment(text)]
+
+
+def _profile_name(title_segment):
+    name, _remainder = split_title(title_segment)
+    name = squeeze(name).strip(" |·")
+    if not name or re.search(r"linkedin", name, re.IGNORECASE) or "|" in name:
+        return ""
+    return name
+
+
+def _leading_profile_body_segment(snippet, *, title_segments, candidate_name):
+    """Scope a body to the first profile block associated with the row URL.
+
+    The row URL and first title card identify the candidate.  The body is kept
+    useful, but stops at generic evidence boundaries used by public indexes:
+    another title-card name, a profile-view marker, or a subsequent structured
+    experience/education record.  This avoids attaching a neighboring profile's
+    positional claims while retaining the first profile's rich narrative.
+    """
+    text = squeeze(snippet)
+    if not text:
+        return ""
+
+    boundaries = []
+    folded = text.casefold()
+    for other_name in title_segments[1:]:
+        name = _profile_name(other_name)
+        if not name or name.casefold() == candidate_name.casefold():
+            continue
+        position = folded.find(name.casefold())
+        if position > 0:
+            boundaries.append(position)
+
+    view_matches = list(_PROFILE_VIEW_RE.finditer(text))
+    if view_matches:
+        # A profile-view marker is a stable boundary in provider snippets: the
+        # lead's preceding narrative remains useful, while text after it may
+        # be the next flattened result card even when it repeats the lead name.
+        boundaries.append(view_matches[0].start())
+
+    label_positions = [match.start() for match in _PROFILE_LABEL_RE.finditer(text)]
+    experience_positions = [match.start() for match in _PROFILE_EXPERIENCE_RE.finditer(text)]
+    if len(experience_positions) >= 2:
+        # One Experience block may include the lead's Education/Location
+        # metadata. The next Experience block is the first unambiguous
+        # structured boundary between flattened profile records.
+        boundaries.append(experience_positions[1])
+    elif len(experience_positions) == 0 and len(label_positions) >= 2:
+        prefix = text[:label_positions[0]].strip(" |·")
+        boundaries.append(label_positions[1] if not prefix else label_positions[0])
+
+    if not boundaries:
+        return text
+    return squeeze(text[:min(boundaries)]).strip(" |·")
+
+
+def _scope_profile_hit(hit):
+    """Bind raw title/snippet text to the profile represented by `hit['url_key']`."""
+    title_segments = _profile_title_segments(hit.get("title", ""))
+    title_segment = title_segments[0] if title_segments else squeeze(hit.get("title", ""))
+    candidate_name = _profile_name(title_segment)
+    identity_safe = bool(candidate_name)
+    raw_snippet = squeeze(hit.get("snippet", ""))
+    snippet_segment = _leading_profile_body_segment(
+        raw_snippet, title_segments=title_segments, candidate_name=candidate_name,
+    ) if identity_safe else ""
+    snippet_positional_safe = (
+        len(_PROFILE_VIEW_RE.findall(raw_snippet)) <= 1
+        and len(_PROFILE_EXPERIENCE_RE.findall(raw_snippet)) <= 1
+    )
+    return {
+        "scoped_title": title_segment,
+        "scoped_snippet": snippet_segment,
+        "profile_name": candidate_name,
+        "profile_identity_safe": identity_safe,
+        "profile_title_count": len(title_segments),
+        "snippet_positional_safe": snippet_positional_safe,
+    }
+
+
+def _hit_text(hit, *, positional=False):
+    snippet = hit.get("scoped_snippet", hit.get("snippet", ""))
+    if positional and not hit.get("snippet_positional_safe", True):
+        snippet = ""
+    return f"{hit.get('scoped_title', hit.get('title', ''))} {snippet}"
+
+
+def _text_fields(record, *, positional=False):
     fields = []
     for hit in record.get("hits", []):
-        if hit.get("title"):
-            fields.append(("title", hit["title"], hit))
-        if hit.get("snippet"):
-            fields.append(("snippet", hit["snippet"], hit))
+        if not hit.get("profile_identity_safe", True):
+            continue
+        title = hit.get("scoped_title", hit.get("title", ""))
+        snippet = hit.get("scoped_snippet", hit.get("snippet", ""))
+        if title:
+            fields.append(("title", title, hit))
+        if snippet and (not positional or hit.get("snippet_positional_safe", True)):
+            fields.append(("snippet", snippet, hit))
     return fields
+
 
 
 def _contains_phrase(text, phrases):
@@ -123,7 +271,7 @@ def _target_evidence(company, record):
     target_pattern = re.compile(
         r"(?<![a-z0-9])" + re.escape(company_norm) + r"(?![a-z0-9])"
     )
-    for field, text, hit in _text_fields(record):
+    for field, text, hit in _text_fields(record, positional=True):
         normalized = norm_phrase(text)
         positions = [match.start() for match in target_pattern.finditer(normalized)]
         if not positions or not phrase_present(text, company):
@@ -215,7 +363,7 @@ def _level_info(text):
 def _function_level_evidence(target, record):
     info = _target_function_info(target)
     candidates = []
-    for field, text, hit in _text_fields(record):
+    for field, text, hit in _text_fields(record, positional=True):
         words = set(tokens(text))
         core_overlap = sorted(info["title_words"].intersection(words))
         department_overlap = sorted(info["department_words"].intersection(words))
@@ -255,8 +403,8 @@ def _function_level_evidence(target, record):
 
 def _record_eligibility(target, record):
     target_evidence, name_only = _target_evidence(target.get("company", ""), record)
-    all_text = " ".join(text for _field, text, _hit in _text_fields(record))
-    levels = [_level_info(text) for _field, text, _hit in _text_fields(record)]
+    all_text = " ".join(text for _field, text, _hit in _text_fields(record, positional=True))
+    levels = [_level_info(text) for _field, text, _hit in _text_fields(record, positional=True)]
     c_suite = any(item["class"] == "c_suite" for item in levels)
     base = {
         "status": "ineligible",
@@ -278,7 +426,7 @@ def _record_eligibility(target, record):
         base["rationale"] = "Excluded: a C-suite level was observed; executive backfill is outside peer eligibility."
         base["level_evidence"] = [
             {"field": field, "quote": text, "level": "c_suite"}
-            for field, text, _hit in _text_fields(record) if _level_info(text)["class"] == "c_suite"
+            for field, text, _hit in _text_fields(record, positional=True) if _level_info(text)["class"] == "c_suite"
         ]
         return base
     hiring_terms = _contains_phrase(all_text, HIRING_SURFACE_TERMS)
@@ -293,7 +441,7 @@ def _record_eligibility(target, record):
                 "source": _hit.get("source", ""), "source_url": _hit.get("source_url", ""),
                 "observed_at": _hit.get("retrieved_at", "") or _hit.get("observed_at", ""),
             }
-            for field, text, _hit in _text_fields(record)
+            for field, text, _hit in _text_fields(record, positional=True)
             if _contains_phrase(text, HIRING_SURFACE_TERMS)
         ]
         base["level_evidence"] = [
@@ -302,7 +450,7 @@ def _record_eligibility(target, record):
                 "source": _hit.get("source", ""), "source_url": _hit.get("source_url", ""),
                 "observed_at": _hit.get("retrieved_at", "") or _hit.get("observed_at", ""),
             }
-            for field, text, _hit in _text_fields(record)
+            for field, text, _hit in _text_fields(record, positional=True)
             if _contains_phrase(text, HIRING_SURFACE_TERMS)
         ]
         base["rationale"] = "Eligible in the hiring-adjacent lane: current target-company evidence and a hiring surface are both observed; it cannot reorder peer leads."
@@ -403,7 +551,7 @@ def _fire_paths(hit, packs):
     stamp path already counted the same stamps in this result.
     """
     fired = []
-    text = f"{hit['title']} {hit['snippet']}"
+    text = _hit_text(hit, positional=True)
     for pack_id, pack in packs.items():
         if pack_id == "shared_stamp":
             continue
@@ -448,7 +596,7 @@ def _score_candidate(record, packs, anchors_by_id, idf):
                 if anchor and anchor["type"] in allowed:
                     seen.setdefault(anchor_id, set()).update(info["fields"])
             if path == "hiring_adjacent":
-                terms.update(_match_lexicon_terms(pack, f"{hit['title']} {hit['snippet']}"))
+                terms.update(_match_lexicon_terms(pack, _hit_text(hit, positional=True)))
 
         path_total = 0.0
         type_counts = {}
@@ -540,7 +688,7 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
                 })
                 continue
             url_key = normalize_public_url(row["url"])
-            hits.append({
+            hit = {
                 "url_key": url_key,
                 "url_observed": row["url"],
                 "title": row["title"],
@@ -553,7 +701,9 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
                 "retrieved_at": (row.get("observed_at", "") or entry.get("retrieved_at", "")
                                   or results_doc.get("retrieved_at", "")),
                 "slug_text": " ".join(profile_slug_tokens(url_key)),
-            })
+            }
+            hit.update(_scope_profile_hit(hit))
+            hits.append(hit)
 
     # ---- phase 2: anchor observations + idf ---------------------------------
     total_hits = len(hits)
@@ -562,7 +712,15 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
         for anchor in anchors:
             if not anchor["used_in_ranking"]:
                 continue
-            fields = _match_anchor(anchor, hit["title"], hit["snippet"], hit["slug_text"])
+            fields = (
+                _match_anchor(
+                    anchor,
+                    hit["scoped_title"],
+                    hit["scoped_snippet"] if hit["snippet_positional_safe"] else "",
+                    hit["slug_text"],
+                )
+                if hit["profile_identity_safe"] else []
+            )
             if fields:
                 observed[anchor["anchor_id"]] = {"type": anchor["type"], "fields": fields}
         hit["anchors"] = observed
@@ -664,10 +822,10 @@ def rank_candidates(compiled, results_doc, *, queries_source="<supplied queries>
         names = []
         headlines = []
         for hit in record["hits"]:
-            headline = hit["title"] or hit["snippet"]
+            headline = hit.get("scoped_title") or hit.get("scoped_snippet")
             if headline and headline not in headlines:
                 headlines.append(headline)
-            name, _ = split_title(hit["title"])
+            name = hit.get("profile_name") or split_title(hit.get("scoped_title", ""))[0]
             if name and name not in names:
                 names.append(name)
 
