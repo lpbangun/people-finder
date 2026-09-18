@@ -52,6 +52,13 @@ Do **not** embed the resume and kNN over LinkedIn. We have no member graph, snip
 
 Search backends run on the **host**, not in the core. No API key in the plugin. People-finder never opens Jobsss `PLUGIN_DATA`.
 
+Fixed-list contactability planning is also a host stage, not a new People-finder operation.
+After a human selects leads, a host-owned Fiber/Exa bridge may perform one bounded lookup per
+person and hand each normalized result to contact-brief. Issue [#3](https://github.com/lpbangun/people-finder/issues/3)
+defines the required stable correlation IDs/order, resumable journal, aggregate spend cap,
+conservative statuses and raw-run retention. The People-finder core stays offline: no Fiber
+credentials, provider calls, mailbox checks or automatic contact writes are added here.
+
 ## Exa (optional, contact-brief style)
 
 Host Codex/Hermes Exa plugin → normalized envelope → `import-exa`. No `EXA_API_KEY` on that route. Direct Agent API is a journaled fallback. Exa is people/query **recall**, not identity and not email.
