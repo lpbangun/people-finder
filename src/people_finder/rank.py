@@ -84,6 +84,17 @@ FUNCTION_FAMILIES = {
     "legal": {"legal", "counsel", "compliance", "privacy"},
     "support": {"support", "success", "customer", "services", "service"},
 }
+STRICT_FUNCTION_FAMILIES = {
+    "engineering": {"backend", "devops", "developer", "development", "engineering", "engineer", "frontend", "infrastructure", "platform", "software", "systems", "technical"},
+    "data": {"analytics", "analytic", "data", "fraud", "insights", "learning", "machine", "ml", "quantitative", "research", "researcher", "science", "scientist"},
+    "design": {"creative", "design", "designer", "ui", "ux"},
+    "go_to_market": {"account", "business", "brand", "development", "demand", "growth", "marketing", "partnership", "revenue", "sales", "sdr", "representative"},
+    "people": {"employee", "hr", "human", "learning", "people", "recruiting", "recruitment", "resources", "talent", "workplace"},
+    "operations": {"operation", "operations", "ops", "program", "strategy", "workplace"},
+    "product": {"pm", "product", "roadmap"},
+    "support": {"customer", "service", "services", "success", "support"},
+}
+
 HIRING_SURFACE_TERMS = tuple(dict.fromkeys((*HIRING_ADJACENT_TERMS, "recruiting", "recruitment", "sourcer")))
 
 
@@ -148,6 +159,10 @@ def _profile_title_segments(title):
 def _profile_name(title_segment):
     name, _remainder = split_title(title_segment)
     name = squeeze(name).strip(" |·")
+    if " at " in name.casefold():
+        name = re.split(r"\s+at\s+", name, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    elif re.search(r"\s+@\s*", name):
+        name = re.split(r"\s+@\s*", name, maxsplit=1)[0].strip()
     if not name or re.search(r"linkedin", name, re.IGNORECASE) or "|" in name:
         return ""
     return name
@@ -335,14 +350,17 @@ _AGGREGATE_PROFILE_RE = re.compile(
 
 
 def _candidate_name_present(text, name):
-    """Return whether every meaningful name token occurs in one live segment."""
-    name_tokens = [
+    """Return whether the candidate's meaningful name tokens co-locate."""
+    wanted = {
         token.casefold()
         for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", str(name or ""))
         if len(token) > 1
-    ]
-    folded = str(text or "").casefold()
-    return bool(name_tokens) and all(token in folded for token in name_tokens)
+    }
+    observed = {
+        token.casefold()
+        for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", str(text or ""))
+    }
+    return bool(wanted) and wanted.issubset(observed)
 
 
 def _target_company_marker_present(text, company):
@@ -350,82 +368,186 @@ def _target_company_marker_present(text, company):
     company = squeeze(company)
     if not company:
         return False
-    pattern = (
-        r"(?:\bat\s+|@\s*|experience:\s*|experiencia:\s*|[-–—|]\s*)"
-        + re.escape(company)
-        + r"(?=$|[^\w])"
+    folded = str(text or "")
+    company_match = re.search(
+        r"(?<![\w])" + re.escape(company) + r"(?![\w])", folded, re.IGNORECASE
     )
-    return bool(re.search(pattern, str(text or ""), re.IGNORECASE))
+    if not company_match:
+        return False
+    after = folded[company_match.end():]
+    if re.match(
+        r"\s+(?:AI|AI-powered|Corp(?:oration)?|Engineering|Group|Inc|Labs?|LLC|Media|Networks?|Security|Solutions?|Systems?|Technolog(?:y|ies)|TV)\b",
+        after,
+        re.IGNORECASE,
+    ):
+        return False
+    before = folded[:company_match.start()]
+    if re.search(r"\b(?:former|formerly|past|previously|ex)\s*$", before, re.IGNORECASE):
+        return False
+    if re.search(
+        r"(?:\bat\s+|@\s*|experience:\s*|experiencia:\s*|currently\s+|joined\s+|employed\s+at\s+|[-–—|]\s*)$",
+        before,
+        re.IGNORECASE,
+    ):
+        return True
+    return bool(re.search(r"\b(?:employee|employed|staff|team)\s*[:\-]?\s*$", before, re.IGNORECASE))
 
 
+def _strict_company_marker(text, company, candidate):
+    """Return an exact current-employer quote from one textual segment."""
+    company = squeeze(company)
+    if not company:
+        return ""
+    candidate_norm = " ".join(
+        token.casefold()
+        for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", str(candidate or ""))
+        if len(token) > 1
+    )
+    pattern = re.compile(
+        r"(?<![\w])" + re.escape(company) + r"(?![\w])", re.IGNORECASE
+    )
+    continuation_words = {
+        "ai", "corp", "corporation", "engineering", "group", "inc", "labs", "llc",
+        "media", "networks", "security", "solutions", "systems", "technology",
+        "technologies", "tv",
+    }
+    for match in pattern.finditer(str(text or "")):
+        before = str(text or "")[:match.start()]
+        after = str(text or "")[match.end():]
+        continuation = re.match(r"[A-Za-z][\w-]*", after.lstrip())
+        if continuation and (
+            continuation.group(0).casefold() in continuation_words
+            or continuation.group(0)[:1].isupper()
+        ):
+            continue
+        if candidate_norm and " ".join(
+            token.casefold()
+            for token in re.findall(r"[\wÀ-ÖØ-öø-ÿ]+", before)
+            if len(token) > 1
+        ) == candidate_norm:
+            continue
+        prefix = before[-100:]
+        if re.search(
+            r"(?:\bat\s*|@\s*|experience\s*:\s*|current(?:ly)?\s+(?:at\s+)?|joined\s+|employed\s+at\s+|[-–—|]\s*)$",
+            prefix,
+            re.IGNORECASE,
+        ):
+            if re.search(r"\b(?:former|formerly|previously|past|ex)\b", prefix[-50:], re.IGNORECASE):
+                continue
+            return match.group(0)
+        if re.search(r"\b(?:employee|team|staff)\b", after[:50], re.IGNORECASE):
+            return match.group(0)
+    return ""
 def _strict_live_segments(hit):
-    """Return evidence segments for strict co-location checks.
-
-    Ordinary rows are one title/snippet segment. Rows that visibly flatten
-    several profiles are split at provider aggregate separators; evidence from
-    a neighboring profile is never attached to the row URL's lead.
-    """
+    """Return separate title/snippet segments; never join independent fields."""
+    segments = []
     title = squeeze(hit.get("title", hit.get("scoped_title", "")))
     snippet = squeeze(hit.get("snippet", hit.get("scoped_snippet", "")))
-    raw = "\n".join(part for part in (title, snippet) if part).strip()
-    if not raw:
-        return []
-    if not _AGGREGATE_PROFILE_RE.search(raw):
-        scoped_title = squeeze(hit.get("scoped_title", title))
-        scoped_snippet = squeeze(hit.get("scoped_snippet", snippet))
-        return ["\n".join(part for part in (scoped_title, scoped_snippet) if part).strip()]
-    return [part.strip() for part in re.split(
-        r"(?:\.\.\.|…|\s+·\s+|\s+\|\s+LinkedIn)", raw, flags=re.IGNORECASE
-    ) if part.strip()]
+    for field, text in (("title", title), ("snippet", snippet)):
+        if not text:
+            continue
+        if field == "title":
+            parts = [_clean_profile_title_segment(part) for part in re.split(r"(?:\.\.\.|…|\s*\|\s*LinkedIn)", text, flags=re.IGNORECASE) if _clean_profile_title_segment(part)]
+        else:
+            parts = re.split(
+                r"(?:\.\.\.|…|\s*\|\s*LinkedIn|\s*[·•]\s*|(?<=[.!?])\s+|(?<=[.!?])(?=[A-ZÀ-ÖØ-öø-ÿ]))",
+                text,
+                flags=re.IGNORECASE,
+            )
+        for part in parts:
+            part = squeeze(part).strip(" |·•")
+            if part:
+                segments.append({"field": field, "text": part})
+    return segments
+def _strict_segment_function_evidence(target, text, hit):
+    """Return target-title family/level evidence from this one segment."""
+    title = squeeze(target.get("title", ""))
+    stopwords = {"a", "an", "and", "at", "by", "for", "in", "of", "on", "the", "to", "with"}
+    raw_target = set(tokens(title)) - stopwords
+    functional_target = raw_target - LEVEL_TERMS
+    target_families = {family for family, vocabulary in STRICT_FUNCTION_FAMILIES.items() if set(tokens(title)).intersection(vocabulary)}
+    segment_tokens = set(tokens(text))
+    segment_families = {family for family, vocabulary in STRICT_FUNCTION_FAMILIES.items() if segment_tokens.intersection(vocabulary)}
+    role_overlap = sorted(functional_target.intersection(segment_tokens))
+    family_overlap = sorted(target_families.intersection(segment_families))
+    level_terms = sorted(segment_tokens.intersection({
+        "associate", "analyst", "bdr", "ceo", "chief", "coordinator", "cto", "cfo", "cmo", "coo", "cpo", "cro",
+        "designer", "developer", "director", "engineer", "head", "intern", "jr", "junior", "lead", "manager",
+        "principal", "recruiter", "researcher", "representative", "rep", "scientist", "senior", "specialist", "sdr",
+        "staff", "vp", "vice", "president",
+    }))
+    if not (role_overlap or family_overlap) or not level_terms:
+        return None
+    normalized = norm_phrase(text)
+    if any(phrase_present(normalized, term) for term in C_SUITE_TERMS):
+        return None
+    if any(phrase_present(normalized, term) for term in HIRING_SURFACE_TERMS):
+        return None
+    level = _level_info(text)
+    return {
+        "field": "",
+        "quote": text,
+        "source": hit.get("source", ""),
+        "source_url": hit.get("source_url", ""),
+        "observed_at": hit.get("retrieved_at", "") or hit.get("observed_at", ""),
+        "position": hit.get("position", ""),
+        "match_kind": "function_head" if level["class"] == "function_head" else "function_peer",
+        "level": level["class"],
+        "role_terms": role_overlap,
+        "function_families": family_overlap,
+        "level_terms": level_terms,
+    }
 
 
 def _strict_peer_colocation(target, hit):
-    """Shared predicate for peer eligibility and emitted peer flags.
-
-    A peer is valid only when one supplied result row/segment contains the
-    candidate name, a positional target-company marker, and function/level
-    evidence. The returned evidence is restricted to that same hit so later
-    merging cannot create a cross-row eligibility claim.
-    """
-    target_evidence, name_only = _target_evidence(target.get("company", ""), {"hits": [hit]})
-    function_evidence, _info = _function_level_evidence(target, {"hits": [hit]})
-    profile_name = hit.get("profile_name") or _profile_name(hit.get("scoped_title", ""))
-    acceptable_terms = {
-        str(term)
-        for evidence in function_evidence
-        for term in (
-            evidence.get("role_terms", [])
-            + evidence.get("function_families", [])
-            + evidence.get("level_terms", [])
-        )
-    }
-    if not target_evidence or not function_evidence or not profile_name:
+    """Require identity, current target, and function/level in one segment."""
+    broad_target_evidence, name_only = _target_evidence(
+        target.get("company", ""), {"hits": [hit]}
+    )
+    profile_name = hit.get("profile_name") or _profile_name(
+        hit.get("scoped_title", hit.get("title", ""))
+    )
+    segments = _strict_live_segments(hit)
+    if not profile_name:
         return {
             "passed": False,
             "name_only_target_match": name_only,
-            "target_company_evidence": target_evidence,
-            "function_evidence": function_evidence,
-            "segments": [],
+            "target_company_evidence": broad_target_evidence,
+            "function_evidence": [],
+            "segments": [item["text"] for item in segments],
         }
-    for segment in _strict_live_segments(hit):
-        if (
-            _candidate_name_present(segment, profile_name)
-            and _target_company_marker_present(segment, target.get("company", ""))
-            and any(phrase_present(segment, term) for term in acceptable_terms)
-        ):
-            return {
-                "passed": True,
-                "name_only_target_match": False,
-                "target_company_evidence": target_evidence,
-                "function_evidence": function_evidence,
-                "segments": [segment],
-            }
+    for item in segments:
+        text = item["text"]
+        if not _candidate_name_present(text, profile_name):
+            continue
+        company_quote = _strict_company_marker(text, target.get("company", ""), profile_name)
+        if not company_quote:
+            continue
+        function_row = _strict_segment_function_evidence(target, text, hit)
+        if function_row is None:
+            continue
+        function_row["field"] = item["field"]
+        target_row = {
+            "field": item["field"],
+            "quote": company_quote,
+            "source": hit.get("source", ""),
+            "source_url": hit.get("source_url", ""),
+            "observed_at": hit.get("retrieved_at", "") or hit.get("observed_at", ""),
+            "position": hit.get("position", ""),
+        }
+        return {
+            "passed": True,
+            "name_only_target_match": False,
+            "target_company_evidence": [target_row],
+            "function_evidence": [function_row],
+            "segments": [text],
+        }
     return {
         "passed": False,
         "name_only_target_match": name_only,
-        "target_company_evidence": target_evidence,
-        "function_evidence": function_evidence,
-        "segments": _strict_live_segments(hit),
+        "target_company_evidence": broad_target_evidence,
+        "function_evidence": [],
+        "segments": [item["text"] for item in segments],
     }
 
 def _function_families(text):

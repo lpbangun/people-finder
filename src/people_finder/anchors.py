@@ -717,6 +717,8 @@ def _function_query_variants(title, phrase):
     # before the level token so the query matches normal public headlines.
     if suffix and (not prefix or prefix_level_only):
         add_forms(squeeze(f"{suffix} {prefix}"))
+    if suffix and prefix and not prefix_level_only:
+        add_forms(squeeze(f"{suffix} {prefix}"))
     # Preserve a compacted/expanded form of the full title when it is the only
     # useful variant. The canonical anchor value is appended by pack compiler.
     add_forms(phrase)

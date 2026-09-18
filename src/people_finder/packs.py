@@ -110,10 +110,12 @@ def _utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _query_for(value_a, value_b=""):
+def _query_for(value_a, value_b="", *, positional=False):
     clause = f'"{value_a}"'
     if value_b:
         clause = f'{clause} "{value_b}"'
+        if positional:
+            clause = f'{clause} "at {value_b}"'
     return f"{clause} site:linkedin.com/in"
 
 
@@ -219,7 +221,7 @@ def _compile_pack(spec, anchors, target):
                     deduped_values.append(value)
             for value_index, value in enumerate(deduped_values[:available]):
                 row = {
-                    "query": _query_for(value, company) if spec["requires_target_employer"]
+                    "query": _query_for(value, company, positional=function_pack) if spec["requires_target_employer"]
                     else _query_for(value),
                     "anchor_ids": [anchor["anchor_id"]],
                 }
