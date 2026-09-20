@@ -1,0 +1,38 @@
+{
+  "$schema": "people-finder-compat-matrix/v1",
+  "plugin": "people-finder",
+  "sourceOfTruth": "portable Agent Plugins package at the repository root (plugin.json, mcp.json, skills/people-finder/SKILL.md, bin/people-finder, src/people_finder). Generated adapters are pointers to that canonical source and contain no duplicated policy, tools or discovery logic.",
+  "componentLocations": {
+    "manifest": "plugin.json",
+    "skills": "skills/people-finder/SKILL.md",
+    "mcp": "mcp.json",
+    "runtime": "./bin/people-finder"
+  },
+  "hostData": {
+    "usesPluginData": false,
+    "usesPluginRoot": false,
+    "reason": "people-finder persists no state: it reads caller-named inputs and writes only the caller-named output path. No data directory is declared, so no store is fabricated on its behalf and no host state can be read through it."
+  },
+  "clients": {
+    "hermes": {
+      "id": "hermes",
+      "status": "verified",
+      "loading": "native",
+      "adapter": "compat/hermes/config.yaml.template",
+      "probe": "python3 tests/plugin/check_hermes_host_probe.py",
+      "verifiedBy": "real isolated launch: the rendered adapter was loaded in a temporary HERMES_HOME and `hermes mcp test people-finder` connected to the bundled runtime and discovered its three tools (compile_people_queries, rank_people_candidates, start_people_research); the staged skill was simultaneously discovered by `hermes skills list` in the same isolated home. No real user profile was read or written.",
+      "notes": "verified by the packaging probe's isolated launch; the adapter passes no data directory because the plugin stores nothing."
+    }
+  },
+  "unverifiedClients": {
+    "note": "Clients without a proven isolated launch are absent from `clients` rather than labelled supported. A client that implements Agent Plugins reads the canonical fixed locations directly; a client that needs a rendered pointer gets one only after a real isolated launch proves it.",
+    "candidates": []
+  },
+  "verification": {
+    "method": "isolated temporary host configuration only: a fresh temporary HERMES_HOME is rendered, the real host binary is invoked against it, and the real user profile is never read or written.",
+    "statuses": ["verified", "built", "intended", "unverified"],
+    "never": "nothing here implies people-finder performs search, identity resolution, contactability checks, sending, applying or any other external action; a candidate output is never proof of contactability.",
+    "paths": "no absolute user path is required by the package: adapters are rendered at probe time into a temporary location."
+  },
+  "versionPolicy": "a client entry claims verified only from a real isolated launch; availability of a binary is not integration proof."
+}

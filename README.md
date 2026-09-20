@@ -27,6 +27,14 @@ Second-degree warmth is approximated as `shared_stamp`: two of the seeker's publ
 observed in one supplied result. It is labelled `public_stamp_proxy` and never claims a
 member-graph edge.
 
+For an approved fixed list, email enrichment is a separate host-owned stage. The host may
+correlate selected leads to one Fiber/Exa Agent lookup each, but it must own bounded
+concurrency/spend, resumable journaling, raw-provider retention and the handoff into
+contact-brief. See [people-finder issue #3](https://github.com/lpbangun/people-finder/issues/3).
+People-finder remains offline and credential-free: it does not call Fiber, inspect mailboxes,
+infer addresses or write contact records, and a candidate output is never proof of
+contactability.
+
 ## Public operations
 
 ```sh
@@ -57,6 +65,35 @@ only when every frozen assertion for its criterion passed, and performs no live 
 Convenience runner: `python3 tests/tools/run_gate.py <label>` writes raw stdout, stderr, exit
 codes and an assertion summary to `.tmp/benchmark-<label>/`.
 
+## Plugin packaging (additive checks)
+
+The repository root is a portable Agent Plugins 1.0.0 package: `plugin.json` (manifest),
+`mcp.json` (one stdio server `people-finder` -> `./bin/people-finder mcp`),
+`skills/people-finder/SKILL.md` (installed skill), `bin/people-finder` and
+`src/people_finder/` (bundled runtime). `compat/hermes/config.yaml.template` is the only
+generated adapter, and it is a pointer with no policy.
+
+The package declares **no data directory**: people-finder stores no state, so
+`${PLUGIN_DATA}` is deliberately not used (nor is `${PLUGIN_ROOT}`) and no store is fabricated
+on its behalf. Install is a directory copy; uninstall is a directory removal.
+
+```sh
+python3 tests/plugin/check_plugin_packaging.py   # P  manifest, registration, skill, install, keep-outs
+python3 tests/plugin/check_hermes_host_probe.py  # H  real isolated Hermes host probe
+```
+
+`check_plugin_packaging.py` is fully offline and fixture-based: it validates the Manifest and
+MCP configuration against the Agent Plugins 1.0.0 rules, spawns the declared command + args and
+asserts the advertised tool names and argument schemas, drives real offline tool calls over that
+declared server, checks the miss/shortfall semantics, proves the host-provided `PLUGIN_DATA`
+canary is untouched, and proves a relocated install produces identical results with a clean
+uninstall.
+
+`check_hermes_host_probe.py` renders the adapter into a temporary `HERMES_HOME` and runs the real
+host surface there (`hermes mcp test people-finder`, `hermes skills list`). It exits `2` with an
+honest `status: unavailable` when no Hermes binary is present. It proves local host integration
+only: no discovery, no send, no paid call, and no credential is copied between profile homes.
+
 ## Layout
 
 ```text
@@ -68,7 +105,11 @@ src/people_finder/                zero-dependency core (stdlib only)
   exa_import.py                   recorded provider recall import
   results.py  schema.py           supplied-input loading and output validation
   mcp_server.py  cli.py           stdio JSON-RPC surface and command dispatch
+plugin.json  mcp.json             Agent Plugins 1.0.0 manifest and MCP registration
+skills/people-finder/SKILL.md     installed skill: workflow, tool shapes, boundaries
+compat/                           generated client adapters (pointers only)
 tests/benchmark/                  the six frozen checks + shared harness
+tests/plugin/                     additive packaging and host-probe checks
 tests/fixtures/                   fictional resumes, job cards, recorded SERPs, recorded envelopes
 tests/tools/                      fixture builder and gate runner
 ```

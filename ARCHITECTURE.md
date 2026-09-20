@@ -49,8 +49,16 @@ Do **not** embed the resume and kNN over LinkedIn. We have no member graph, snip
 - **MCP** — `compile_people_queries`, `rank_people_candidates`, `start_people_research` (accepts **supplied** search results; no required network)
 - **CLI** — same operations on JSON files
 - **Zero-dep core** — extract anchors, compile packs, filter `linkedin.com/in`, normalize, dedupe, score, validate
+- **Packaged plugin** — `plugin.json`, `mcp.json` (`./bin/people-finder mcp`), `skills/people-finder/SKILL.md`; no data directory is declared because the core stores nothing
 
 Search backends run on the **host**, not in the core. No API key in the plugin. People-finder never opens Jobsss `PLUGIN_DATA`.
+
+Fixed-list contactability planning is also a host stage, not a new People-finder operation.
+After a human selects leads, a host-owned Fiber/Exa bridge may perform one bounded lookup per
+person and hand each normalized result to contact-brief. Issue [#3](https://github.com/lpbangun/people-finder/issues/3)
+defines the required stable correlation IDs/order, resumable journal, aggregate spend cap,
+conservative statuses and raw-run retention. The People-finder core stays offline: no Fiber
+credentials, provider calls, mailbox checks or automatic contact writes are added here.
 
 ## Exa (optional, contact-brief style)
 

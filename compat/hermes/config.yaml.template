@@ -1,0 +1,15 @@
+# people-finder -> Hermes thin adapter
+#
+# Rendered with the absolute launcher and a temporary HERMES_HOME by
+# `python3 tests/plugin/check_hermes_host_probe.py`. The canonical portable
+# package stays at the plugin root: plugin.json, mcp.json,
+# skills/people-finder/SKILL.md, ./bin/people-finder.
+#
+# This adapter is a pointer only: no discovery policy, no tool implementation,
+# no fixture, no credential. It deliberately passes NO data directory --
+# people-finder persists nothing, so `${PLUGIN_DATA}` is not used and no store
+# is fabricated on its behalf.
+mcp_servers:
+  people-finder:
+    command: __PEOPLE_FINDER_LAUNCHER__
+    args: [mcp]
