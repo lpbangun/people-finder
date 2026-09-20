@@ -1819,6 +1819,36 @@ def build_supplied_results(envelopes, company, job_title):
     return document, provenance
 
 
+def select_live_match(document, observed_urls):
+    """Pick the locked live match out of a ranked people-candidates document.
+
+    A match must be a ranked peer (preferred) or hiring-adjacent item whose normalized
+    public URL was observed in the supplied live results and whose ``paths`` were derived
+    by the unchanged product ranker. An observed item with empty ``paths`` is diagnostic
+    only: it is reported so a failed attempt stays explainable, but it is never returned
+    as ``matched``, because frozen L12 requires a nonempty evidence-derived path. With no
+    qualifying item the caller keeps looking instead of locking a pathless lead.
+    """
+    lanes = []
+    matched = None
+    diagnostic = None
+    if not isinstance(document, dict):
+        return {"lanes": lanes, "matched": matched, "diagnostic": diagnostic}
+    for lane_key in ("candidates", "hiring_adjacent"):
+        for item in document.get(lane_key) or []:
+            if normalize_public_url(item.get("public_url")) not in observed_urls:
+                continue
+            lanes.append(lane_key)
+            if not item.get("paths"):
+                if diagnostic is None:
+                    diagnostic = {"lane_key": lane_key, "item": item,
+                                  "reason": "observed_url_with_empty_paths"}
+                continue
+            if matched is None:
+                matched = {"lane_key": lane_key, "item": item}
+    return {"lanes": sorted(set(lanes)), "matched": matched, "diagnostic": diagnostic}
+
+
 def rank_supplied_results(state, attempt, results_document, label):
     """L12: run the product ranker over the live supplied results."""
     results_path = attempt.get("results_path") or os.path.join(
@@ -1842,29 +1872,25 @@ def rank_supplied_results(state, attempt, results_document, label):
             normalized = normalize_public_url(row.get("url"))
             if normalized:
                 observed_urls.add(normalized)
-    lanes = []
-    matched = None
     peer_count = 0
     hiring_adjacent_count = 0
     if isinstance(document, dict):
         peer_count = len(document.get("candidates") or [])
         hiring_adjacent_count = len(document.get("hiring_adjacent") or [])
-        for lane_key in ("candidates", "hiring_adjacent"):
-            for item in document.get(lane_key) or []:
-                if normalize_public_url(item.get("public_url")) in observed_urls:
-                    lanes.append(lane_key)
-                    if matched is None:
-                        matched = {"lane_key": lane_key, "item": item}
+    selection = select_live_match(document if isinstance(document, dict) else {}, observed_urls)
+    lanes = selection["lanes"]
+    matched = selection["matched"]
     return {
         "results_path": results_path,
         "candidates_path": candidates_path,
         "record": record,
         "document": document,
         "observed_urls": sorted(observed_urls),
-        "lanes": sorted(set(lanes)),
+        "lanes": lanes,
         "peer_candidates": peer_count,
         "hiring_adjacent_candidates": hiring_adjacent_count,
         "matched": matched,
+        "match_diagnostic": selection["diagnostic"],
     }
 
 
@@ -1973,10 +1999,15 @@ def run_journey(result, state, config):
             continue
         if rank["matched"] is None:
             attempt["rejected"] = (
+                "live results tied the selected employer to a ranked profile with no fired "
+                "relationship path"
+                if rank.get("match_diagnostic") else
                 "live results did not tie the selected employer to a ranked public profile"
             )
             continue
-        if rank.get("peer_candidates"):
+        # The lock follows the lane of the accepted match, not the raw ranked
+        # count: a peer lane holding only pathless items is not a peer lock.
+        if rank["matched"]["lane_key"] == "candidates":
             attempt["accepted"] = True
             attempt["lock_reason"] = "peer_candidate_ranked_from_live_results"
             break
@@ -2035,6 +2066,7 @@ def attempt_summary(attempt):
         "employer_tied": live.get("employer_tied"),
         "rank_counts": (rank.get("document") or {}).get("counts"),
         "rank_matched": bool(rank.get("matched")),
+        "rank_match_diagnostic": ((rank.get("match_diagnostic") or {}).get("reason")),
         "peer_candidates": rank.get("peer_candidates"),
         "hiring_adjacent_candidates": rank.get("hiring_adjacent_candidates"),
     }
