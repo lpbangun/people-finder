@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "people-finder",
+  "version": "0.1.0",
+  "description": "Portable Agent Plugin with a bundled zero-dependency ./bin/people-finder runtime for offline typed-anchor candidate-lead discovery: compile query packs from one supplied profile and one target job, rank supplied public /in/ leads, and merge one recorded provider envelope. Discovery evidence only - never identity, approval, contactability or an external action; no search backend, no credentials, no network and no state of its own.",
+  "license": "MIT",
+  "keywords": [
+    "candidate-discovery",
+    "typed-anchors",
+    "mcp",
+    "agent-skills",
+    "offline"
+  ]
+}
