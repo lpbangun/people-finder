@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Criterion R — ranking, provenance, and non-invention.
 
-Command: python3 tests/benchmark/check_ranking.py
+Command: run with the active Python interpreter.
 """
 
 import os
@@ -10,10 +10,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _harness import (BIN, JOB_A, JOB_B, JOB_C, RESUME_A, RESUME_B, RESUME_C,
+from _harness import (JOB_A, JOB_B, JOB_C, RESUME_A, RESUME_B, RESUME_C,
                       SERP_A, SERP_B, SERP_C, claim_token_hits, clean_env,
                       compile_fixture, digest, expect, rank_fixture, read_json,
-                      read_text, require_product, run_check, run_cmd, scratch,
+                      product_command, read_text, require_product, run_check, run_cmd, scratch,
                       strip_nested, truthy_forbidden_keys, write_json)
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
@@ -75,7 +75,7 @@ def body(result):
     doc_c = ranked["c"]["first"]
 
     # ---- R1: shape, public URL provenance, arrays -------------------------
-    validation_record = run_cmd([BIN, "validate", ranked["a"]["path"]], env=clean_env())
+    validation_record = run_cmd(product_command("validate", ranked["a"]["path"]), env=clean_env())
     validate_json = validation_record["json"] or {}
     shape_rows = []
     shape_ok = doc_a.get("schema") == "people-candidates.v1"

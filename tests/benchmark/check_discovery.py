@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Criterion D — typed discovery and query packs.
 
-Command: python3 tests/benchmark/check_discovery.py
+Command: run with the active Python interpreter.
 """
 
 import os

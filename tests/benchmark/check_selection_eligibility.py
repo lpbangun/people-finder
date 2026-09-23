@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _harness import BIN, clean_env, run_cmd, scratch
+from _harness import clean_env, product_command, run_cmd, scratch
 
 AT = "2026-09-17T00:00:00Z"
 TARGET_JOB = {
@@ -65,10 +65,10 @@ def compile_job(workdir, job, label):
     output_path = os.path.join(workdir, label + "-queries.json")
     write_text(resume_path, RESUME)
     write_json(job_path, job)
-    run = run_cmd([
-        BIN, "compile", "--resume", resume_path, "--job", job_path,
+    run = run_cmd(product_command(
+        "compile", "--resume", resume_path, "--job", job_path,
         "--at", AT, "--out", output_path, "--quiet",
-    ], env=clean_env(), timeout=60)
+    ), env=clean_env(), timeout=60)
     document = None
     if run["returncode"] == 0 and os.path.isfile(output_path):
         document = json.loads(Path(output_path).read_text(encoding="utf-8"))
@@ -105,10 +105,10 @@ def rank_scenario(workdir, compiled, rows_by_pack, label):
     results_path = os.path.join(workdir, label + "-results.json")
     output_path = os.path.join(workdir, label + "-candidates.json")
     write_json(results_path, recorded_results(compiled["document"], rows_by_pack, label))
-    run = run_cmd([
-        BIN, "rank", "--queries", compiled["path"], "--results", results_path,
+    run = run_cmd(product_command(
+        "rank", "--queries", compiled["path"], "--results", results_path,
         "--at", AT, "--out", output_path, "--quiet",
-    ], env=clean_env(), timeout=60)
+    ), env=clean_env(), timeout=60)
     document = None
     if run["returncode"] == 0 and os.path.isfile(output_path):
         document = json.loads(Path(output_path).read_text(encoding="utf-8"))

@@ -13,7 +13,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "bin" / "people-finder"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _harness import product_command
 RESUME = ROOT / "tests" / "fixtures" / "resumes" / "a-rich-stamps.md"
 AT = "2026-09-18T00:00:00Z"
 
@@ -71,10 +72,10 @@ def main():
             "location": "Remote",
             "posting_text": "Synthetic sparse-role retrieval regression.",
         })
-        compiled_run = run([
-            BIN, "compile", "--resume", RESUME, "--job", job_path,
+        compiled_run = run(product_command(
+            "compile", "--resume", RESUME, "--job", job_path,
             "--at", AT, "--out", queries_path, "--quiet",
-        ])
+        ))
         compiled = json.loads(queries_path.read_text(encoding="utf-8")) if compiled_run.returncode == 0 else {}
         packs = compiled.get("packs", [])
         function_pack = next(
@@ -218,10 +219,10 @@ def main():
             "retrieved_at": AT,
             "pack_results": pack_results,
         })
-        ranked_run = run([
-            BIN, "rank", "--queries", queries_path, "--results", results_path,
+        ranked_run = run(product_command(
+            "rank", "--queries", queries_path, "--results", results_path,
             "--at", AT, "--out", candidates_path, "--quiet",
-        ])
+        ))
         ranked = json.loads(candidates_path.read_text(encoding="utf-8")) if ranked_run.returncode == 0 else {}
         candidates = ranked.get("candidates", [])
         candidate_urls = {item.get("public_url") for item in candidates}

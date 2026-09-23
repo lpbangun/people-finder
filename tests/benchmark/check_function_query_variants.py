@@ -12,7 +12,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "bin" / "people-finder"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _harness import product_command
 RESUME = ROOT / "tests" / "fixtures" / "resumes" / "a-rich-stamps.md"
 AT = "2026-09-18T00:00:00Z"
 
@@ -60,10 +61,10 @@ def compile_job(workdir, key, title, company, department):
         "location": "Remote",
         "posting_text": f"Synthetic posting for the {title} role.",
     })
-    result = run([
-        BIN, "compile", "--resume", RESUME, "--job", job_path,
+    result = run(product_command(
+        "compile", "--resume", RESUME, "--job", job_path,
         "--at", AT, "--out", query_path, "--quiet",
-    ])
+    ))
     document = json.loads(query_path.read_text(encoding="utf-8")) if result.returncode == 0 else None
     return result, document, query_path
 
@@ -94,11 +95,11 @@ def rank_job(workdir, key, compiled, company, rows):
             "results": result_rows,
         }],
     })
-    result = run([
-        BIN, "rank", "--queries", workdir / f"{key}-queries.json",
+    result = run(product_command(
+        "rank", "--queries", workdir / f"{key}-queries.json",
         "--results", results_path, "--at", AT,
         "--out", candidates_path, "--quiet",
-    ])
+    ))
     document = json.loads(candidates_path.read_text(encoding="utf-8")) if result.returncode == 0 else None
     return result, document
 

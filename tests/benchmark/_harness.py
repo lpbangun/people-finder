@@ -16,7 +16,9 @@ import traceback
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = os.path.join(ROOT, "bin", "people-finder")
-JOBSSS = "/home/logani/projects/jobsss/bin/jobsss"
+JOBSSS = os.environ.get(
+    "PEOPLE_FINDER_JOBSSS_EXECUTABLE", "/home/logani/projects/jobsss/bin/jobsss"
+)
 BENCHMARK = "people-finder-v1"
 
 RESUME_A = "tests/fixtures/resumes/a-rich-stamps.md"
@@ -46,14 +48,7 @@ CHECK_PATHS = (
     "tests/benchmark/check_keepouts.py",
 )
 
-FROZEN_COMMANDS = (
-    "python3 tests/benchmark/check_discovery.py",
-    "python3 tests/benchmark/check_ranking.py",
-    "python3 tests/benchmark/check_exa_import.py",
-    "python3 tests/benchmark/check_interfaces.py",
-    "python3 tests/benchmark/check_jobsss_composition.py",
-    "python3 tests/benchmark/check_keepouts.py",
-)
+FROZEN_COMMAND_PATHS = CHECK_PATHS
 
 FROZEN_ASSERTIONS = {
     "D": [f"D{i}" for i in range(1, 8)],
@@ -214,8 +209,13 @@ def run_cmd(argv, *, env=None, cwd=None, timeout=180, stdin_text=None):
     return record
 
 
+def product_command(*args, executable=BIN):
+    """Build a product CLI command through the active Python interpreter."""
+    return [sys.executable, os.fspath(executable), *(os.fspath(arg) for arg in args)]
+
+
 def run_cli(*args, env=None, timeout=180, out=None, quiet=True):
-    argv = [BIN, *args]
+    argv = product_command(*args)
     if out:
         argv += ["--out", out]
     if quiet:
@@ -471,6 +471,23 @@ def run_check(criterion, body):
     return result.finish()
 
 
+def optional_skip(criterion, reason):
+    """Emit an explicit optional skip without manufacturing assertion passes."""
+    document = {
+        "benchmark": BENCHMARK,
+        "criterion": criterion,
+        "offline": True,
+        "passed": None,
+        "status": "optional/skipped",
+        "optional": True,
+        "skip_reason": reason,
+        "assertions": [],
+    }
+    sys.stdout.write(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+    return 0
+
+
 def require_product():
     expect(os.path.isfile(BIN), f"missing required executable: {BIN}")
     expect(os.access(BIN, os.X_OK), f"not executable: {BIN}")
@@ -478,7 +495,7 @@ def require_product():
 
 def mcp_call(requests, *, env=None, extra_env=None, timeout=120, executable=None):
     """Speak stdio JSON-RPC to the product; returns per-request responses."""
-    argv = [executable or BIN, "mcp"] if executable else [BIN, "mcp"]
+    argv = product_command("mcp", executable=executable or BIN)
     payload = "".join(json.dumps(request) + "\n" for request in requests)
     record = run_cmd(argv, env=env if env is not None else clean_env(extra_env),
                      timeout=timeout, stdin_text=payload)

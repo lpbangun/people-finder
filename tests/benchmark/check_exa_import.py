@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Criterion E — recorded Exa import.
 
-Command: python3 tests/benchmark/check_exa_import.py
+Command: run with the active Python interpreter.
 """
 
 import os
@@ -10,11 +10,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _harness import (BIN, CREDENTIAL_ENV_KEYS, EXA_MULTIPLE_INVALID, EXA_NO_RESULT,
+from _harness import (CREDENTIAL_ENV_KEYS, EXA_MULTIPLE_INVALID, EXA_NO_RESULT,
                       EXA_ONE_PERSON, JOB_A, RESUME_A, SERP_A, canonical, clean_env,
                       compile_fixture, expect, rank_fixture, read_json,
-                      require_product, removed_env_keys, run_check, run_cmd,
-                      scan_tokens, scratch, source_files, truthy_forbidden_keys,
+                      product_command, require_product, removed_env_keys, run_check,
+                      run_cmd, scan_tokens, scratch, source_files, truthy_forbidden_keys,
                       write_json)
 
 FORBIDDEN_TRUTHY = {"identity_confirmed", "identity_established", "approved", "human_approved",
@@ -33,8 +33,8 @@ REJECTION_CONTEXT_RE = re.compile(r"(banned|forbidden|must not|reject|invalid|ne
 
 
 def import_run(candidates, envelope, out):
-    return run_cmd([BIN, "import-exa", "--candidates", candidates, "--result", envelope,
-                    "--out", out], env=clean_env())
+    return run_cmd(product_command("import-exa", "--candidates", candidates, "--result", envelope,
+                                   "--out", out), env=clean_env())
 
 
 def envelope_shape(relative):
@@ -140,7 +140,7 @@ def body(result):
     # ---- E3: imported lead stays discovery evidence only ------------------
     added_state = added[0]["state"] if added else {}
     forbidden = truthy_forbidden_keys(one_doc, FORBIDDEN_TRUTHY)
-    validate_record = run_cmd([BIN, "validate", one_out], env=clean_env())
+    validate_record = run_cmd(product_command("validate", one_out), env=clean_env())
     validate_json = validate_record["json"] or {}
     result.check(
         "E3",
@@ -241,8 +241,9 @@ def body(result):
     sentinel_out = os.path.join(workdir, "sentinel-key-candidates.json")
     sentinel_env = clean_env({"EXA_API_KEY": "sentinel-value-never-read",
                               "OPENAI_API_KEY": "sentinel-value-never-read"})
-    sentinel_run = run_cmd([BIN, "import-exa", "--candidates", base_path, "--result", EXA_ONE_PERSON,
-                            "--out", sentinel_out], env=sentinel_env)
+    sentinel_run = run_cmd(product_command("import-exa", "--candidates", base_path,
+                                           "--result", EXA_ONE_PERSON, "--out", sentinel_out),
+                            env=sentinel_env)
     stripped_out = os.path.join(workdir, "stripped-env-candidates.json")
     stripped_run = import_run(base_path, EXA_ONE_PERSON, stripped_out)
     files = source_files("bin", "src")

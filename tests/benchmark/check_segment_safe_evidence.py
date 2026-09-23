@@ -12,7 +12,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "bin" / "people-finder"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _harness import product_command
 RESUME = ROOT / "tests" / "fixtures" / "resumes" / "a-rich-stamps.md"
 AT = "2026-09-18T00:00:00Z"
 
@@ -66,10 +67,10 @@ def main():
             "location": "Remote",
             "posting_text": "Synthetic segment-safety role.",
         })
-        compiled = run([
-            BIN, "compile", "--resume", RESUME, "--job", job_path,
+        compiled = run(product_command(
+            "compile", "--resume", RESUME, "--job", job_path,
             "--at", AT, "--out", queries_path, "--quiet",
-        ])
+        ))
         queries = json.loads(queries_path.read_text(encoding="utf-8")) if compiled.returncode == 0 else {}
 
         rows = [
@@ -156,10 +157,10 @@ def main():
             }],
         })
 
-        ranked = run([
-            BIN, "rank", "--queries", queries_path, "--results", results_path,
+        ranked = run(product_command(
+            "rank", "--queries", queries_path, "--results", results_path,
             "--at", AT, "--out", candidates_path, "--quiet",
-        ])
+        ))
         document = json.loads(candidates_path.read_text(encoding="utf-8")) if ranked.returncode == 0 else {}
         candidates = document.get("candidates", [])
         names = [item.get("name") for item in candidates]

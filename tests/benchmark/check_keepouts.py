@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Criterion K — hard keep-outs (binary: any fire forces K = 0).
 
-Command: python3 tests/benchmark/check_keepouts.py
+Command: run with the active Python interpreter.
 """
 
 import json
@@ -11,12 +11,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _harness import (BIN, CHECK_PATHS, EXA_ONE_PERSON, FIXTURE_PATHS,
-                      FROZEN_ASSERTIONS, FROZEN_COMMANDS, JOB_A, RESUME_A, SERP_A,
+from _harness import (CHECK_PATHS, EXA_ONE_PERSON, FIXTURE_PATHS,
+                      FROZEN_ASSERTIONS, FROZEN_COMMAND_PATHS, JOB_A, RESUME_A, SERP_A,
                       audit_guard, canonical, claim_token_hits, clean_env,
                       compile_fixture, expect, guard_env, guard_violations, mcp_call,
-                      netguard, rank_fixture, read_json, read_text, require_product,
-                      run_check, run_cli, run_cmd, scan_tokens, scratch, source_files,
+                      netguard, product_command, rank_fixture, read_json, read_text,
+                      require_product, run_check, run_cli, run_cmd, scan_tokens, scratch, source_files,
                       tool_result_json, truthy_forbidden_keys, write_json)
 
 # --- keep-out token sets -----------------------------------------------------
@@ -68,7 +68,7 @@ OTHER_CHECKS = {
 
 def parse_cli_inventory():
     """Read the advertised subcommands and options from the product's own help."""
-    record = run_cmd([BIN, "--help"], env=clean_env())
+    record = run_cmd(product_command("--help"), env=clean_env())
     text = record["stdout"]
     commands = []
     for line in text.splitlines():
@@ -84,7 +84,7 @@ def help_description_text(text):
 
 
 def parse_cli_options(command):
-    record = run_cmd([BIN, command, "--help"], env=clean_env())
+    record = run_cmd(product_command(command, "--help"), env=clean_env())
     return record, sorted(set(re.findall(r"--[a-z][a-z0-9\-]*", record["stdout"])))
 
 
@@ -281,14 +281,16 @@ def body(result):
     empty_env = {key: value for key, value in clean_env().items() if key in ("PATH", "HOME", "LANG", "LC_ALL")}
     static_key_hits = scan_tokens(product_files, PROVIDER_KEY_TOKENS)
     env_read_hits = scan_tokens(product_files, ENV_READ_TOKENS)
-    bare_compile = run_cmd([BIN, "compile", "--resume", RESUME_A, "--job", JOB_A,
-                            "--out", os.path.join(workdir, "bare-queries.json")], env=empty_env)
-    bare_rank = run_cmd([BIN, "rank", "--queries", os.path.join(workdir, "bare-queries.json"),
-                         "--results", SERP_A, "--out", os.path.join(workdir, "bare-candidates.json")],
-                        env=empty_env)
-    bare_import = run_cmd([BIN, "import-exa", "--candidates", os.path.join(workdir, "bare-candidates.json"),
-                           "--result", EXA_ONE_PERSON, "--out", os.path.join(workdir, "bare-imported.json")],
-                          env=empty_env)
+    bare_compile = run_cmd(product_command("compile", "--resume", RESUME_A, "--job", JOB_A,
+                                           "--out", os.path.join(workdir, "bare-queries.json")),
+                            env=empty_env)
+    bare_rank = run_cmd(product_command("rank", "--queries", os.path.join(workdir, "bare-queries.json"),
+                                        "--results", SERP_A, "--out",
+                                        os.path.join(workdir, "bare-candidates.json")), env=empty_env)
+    bare_import = run_cmd(product_command("import-exa", "--candidates",
+                                          os.path.join(workdir, "bare-candidates.json"),
+                                          "--result", EXA_ONE_PERSON, "--out",
+                                          os.path.join(workdir, "bare-imported.json")), env=empty_env)
     bare_mcp = mcp_call([
         {"jsonrpc": "2.0", "id": "call-1", "method": "tools/call",
          "params": {"name": "compile_people_queries",
@@ -326,26 +328,42 @@ def body(result):
     for criterion, relative in OTHER_CHECKS.items():
         target = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)))), relative)
-        run = run_cmd(["python3", target], env=guard_env(net, base=clean_env()), timeout=600)
+        run = run_cmd([sys.executable, target], env=guard_env(net, base=clean_env()), timeout=600)
         document = run["json"] or {}
         violations = guard_violations(net)
+        optional_skipped = (
+            criterion == "J"
+            and document.get("status") == "optional/skipped"
+            and document.get("optional") is True
+            and document.get("passed") is None
+            and bool(document.get("skip_reason"))
+            and not document.get("assertions")
+        )
         row = {
             "command": run["command"],
             "exit_code": run["returncode"],
             "criterion": document.get("criterion"),
             "offline": document.get("offline"),
             "passed": document.get("passed"),
+            "status": document.get("status", "passed" if document.get("passed") is True else "failed"),
+            "optional_skipped": optional_skipped,
             "network_attempts": violations,
             "stdout_is_single_json_object": run["json"] is not None,
         }
         offline_rows[criterion] = row
         offline_documents[criterion] = document
+        checks_offline_or_optional = document.get("passed") is True or optional_skipped
         all_offline = all_offline and row["criterion"] == criterion and row["offline"] is True \
-            and row["stdout_is_single_json_object"] and not violations
+            and row["stdout_is_single_json_object"] and run["returncode"] == 0 \
+            and checks_offline_or_optional and not violations
     result.check("K8", all_offline, {
         "netguard": "PYTHONPATH sitecustomize denies socket creation in every check and its subprocesses",
         "commands": offline_rows,
-        "all_five_offline": all_offline,
+        "all_checks_offline_or_optional_skip": all_offline,
+        "optional_skip_did_not_claim_a_J_success": (
+            not offline_rows.get("J", {}).get("optional_skipped")
+            or offline_rows.get("J", {}).get("passed") is None
+        ),
         "live_network_scored_as_zero": True,
     })
 
@@ -388,7 +406,10 @@ def body(result):
         for criterion, assertion_ids in FROZEN_ASSERTIONS.items()
     }
     missing_assertion_ids = {key: value for key, value in missing_assertion_ids.items() if value}
-    missing_commands = [command for command in FROZEN_COMMANDS if command not in benchmark_text]
+    missing_commands = [
+        relative for relative in FROZEN_COMMAND_PATHS
+        if not re.search(rf"\bpython(?:3)?\s+{re.escape(relative)}\b", benchmark_text)
+    ]
     checks_missing_ids = {}
     for criterion, relative in OTHER_CHECKS.items():
         text = read_text(relative)
@@ -397,7 +418,21 @@ def body(result):
         if absent:
             checks_missing_ids[criterion] = absent
     runs_missing_ids = {}
+    optional_skipped_runs = []
+    invalid_optional_skips = []
     for criterion, run_document in offline_documents.items():
+        if criterion == "J" and run_document.get("status") == "optional/skipped":
+            valid_skip = (
+                run_document.get("optional") is True
+                and run_document.get("passed") is None
+                and bool(run_document.get("skip_reason"))
+                and not run_document.get("assertions")
+            )
+            if valid_skip:
+                optional_skipped_runs.append(criterion)
+            else:
+                invalid_optional_skips.append(criterion)
+            continue
         emitted = {assertion["id"] for assertion in run_document.get("assertions", [])}
         absent = [assertion_id for assertion_id in FROZEN_ASSERTIONS[criterion]
                   if assertion_id not in emitted]
@@ -406,7 +441,8 @@ def body(result):
     result.check(
         "K10",
         not missing_checks and not missing_fixtures and not missing_assertion_ids
-        and not missing_commands and not checks_missing_ids and not runs_missing_ids,
+        and not missing_commands and not checks_missing_ids and not runs_missing_ids
+        and not invalid_optional_skips,
         {
             "frozen_check_paths_present": len(CHECK_PATHS) - len(missing_checks),
             "frozen_fixture_paths_present": len(FIXTURE_PATHS) - len(missing_fixtures),
@@ -416,6 +452,8 @@ def body(result):
             "frozen_commands_absent_from_BENCHMARK_md": missing_commands,
             "assertion_ids_absent_from_check_sources": checks_missing_ids,
             "assertion_ids_absent_from_check_output": runs_missing_ids,
+            "explicit_optional_skips": optional_skipped_runs,
+            "invalid_optional_skips": invalid_optional_skips,
             "benchmark_sha256": __import__("hashlib").sha256(benchmark_text.encode()).hexdigest(),
             "score_sha256": __import__("hashlib").sha256(score_text.encode()).hexdigest(),
             "converge_rule_present_in_SCORE_md": "D ≥ 9.0" in score_text and "is not an average" in score_text,

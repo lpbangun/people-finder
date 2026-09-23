@@ -14,7 +14,8 @@ from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "bin" / "people-finder"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _harness import product_command
 RESUME = ROOT / "tests" / "fixtures" / "resumes" / "a-rich-stamps.md"
 AT = "2026-09-18T00:00:00Z"
 RETAINED = Path("/home/logani/projects/people-finder-worktrees/people-pipeline-critic-r6")
@@ -204,7 +205,7 @@ def main():
             "department": "Data and research", "location": "Remote",
             "posting_text": "Synthetic sparse-role replay coverage.",
         })
-        compile_run = run([BIN, "compile", "--resume", RESUME, "--job", job_path, "--at", AT, "--out", queries_path, "--quiet"])
+        compile_run = run(product_command("compile", "--resume", RESUME, "--job", job_path, "--at", AT, "--out", queries_path, "--quiet"))
         queries = json.loads(queries_path.read_text(encoding="utf-8")) if compile_run.returncode == 0 else {}
         selected = [row for pack in queries.get("packs", []) for row in pack.get("queries", [])]
         function_pack = next((pack for pack in queries.get("packs", []) if pack.get("pack_id") == "function_at_target"), {})
@@ -229,7 +230,7 @@ def main():
         ]
         pack_results = [{"pack_id": pack.get("pack_id"), "query": pack.get("query", ""), "retrieved_at": AT, "results": rows_for_pack(pack.get("pack_id"), synthetic_rows)} for pack in queries.get("packs", [])]
         write_json(results_path, {"schema": "recorded-serp.v1", "fixture": "synthetic-round7", "backend": "synthetic_public_index", "live_network": False, "retrieved_at": AT, "pack_results": pack_results})
-        rank_run = run([BIN, "rank", "--queries", queries_path, "--results", results_path, "--at", AT, "--out", candidates_path, "--quiet"])
+        rank_run = run(product_command("rank", "--queries", queries_path, "--results", results_path, "--at", AT, "--out", candidates_path, "--quiet"))
         candidates = json.loads(candidates_path.read_text(encoding="utf-8")) if candidates_path.exists() else {}
         emitted_peer = {url_key(item.get("public_url")) for item in candidates.get("candidates", []) if url_key(item.get("public_url"))}
         oracle_peer = independent_peer_urls([row for pack in pack_results for row in pack["results"]], "Aurora Labs", "Senior UX Researcher, Qualitative")
@@ -250,7 +251,7 @@ def main():
             queries_in = retained_artifact(role, "people-queries.json")
             live_in = retained_artifact(role, "live-results.json")
             out = workdir / f"{role}-replay.json"
-            replay_run = run([BIN, "rank", "--queries", queries_in, "--results", live_in, "--at", AT, "--out", out, "--quiet"])
+            replay_run = run(product_command("rank", "--queries", queries_in, "--results", live_in, "--at", AT, "--out", out, "--quiet"))
             ranked = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
             live = json.loads(live_in.read_text(encoding="utf-8"))
             metadata = json.loads((RETAINED / ".oprun" / "smoke-runs" / role / "manifest.json").read_text(encoding="utf-8"))["metadata"]

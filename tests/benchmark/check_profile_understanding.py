@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _harness import BIN, ROOT, clean_env, run_cmd, scratch
+from _harness import ROOT, clean_env, product_command, run_cmd, scratch
 
 AT = "2026-09-17T00:00:00Z"
 DIALECTS = ("heading", "bullet", "mixed", "aliased", "repeated")
@@ -195,10 +195,10 @@ def compile_one(workdir, family, dialect):
     output = os.path.join(workdir, "%s-%s-queries.json" % (family, dialect))
     write_text(resume, RESUME_BUILDERS[dialect](spec))
     write_json(job, job_card(spec))
-    run = run_cmd([
-        BIN, "compile", "--resume", resume, "--job", job, "--at", AT,
+    run = run_cmd(product_command(
+        "compile", "--resume", resume, "--job", job, "--at", AT,
         "--out", output, "--quiet",
-    ], env=clean_env(), timeout=60)
+    ), env=clean_env(), timeout=60)
     document = None
     if run["returncode"] == 0 and os.path.isfile(output):
         document = json.loads(Path(output).read_text(encoding="utf-8"))
@@ -262,10 +262,10 @@ def thin_skip_check(workdir):
     spec = FAMILY_SPECS["data"]
     write_text(resume, text)
     write_json(job, job_card(spec))
-    run = run_cmd([
-        BIN, "compile", "--resume", resume, "--job", job, "--at", AT,
+    run = run_cmd(product_command(
+        "compile", "--resume", resume, "--job", job, "--at", AT,
         "--out", output, "--quiet",
-    ], env=clean_env(), timeout=60)
+    ), env=clean_env(), timeout=60)
     if run["returncode"] != 0 or not os.path.isfile(output):
         return False, {"returncode": run["returncode"], "stderr": run["stderr"][:300]}
     document = json.loads(Path(output).read_text(encoding="utf-8"))

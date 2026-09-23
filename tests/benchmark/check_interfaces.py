@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Criterion I — CLI and MCP parity on supplied results.
 
-Command: python3 tests/benchmark/check_interfaces.py
+Command: run with the active Python interpreter.
 """
 
 import json
@@ -11,9 +11,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _harness import (BIN, JOB_A, RESUME_A, SERP_A, canonical, clean_env,
+from _harness import (JOB_A, RESUME_A, SERP_A, canonical, clean_env,
                       compile_fixture, expect, guard_env, guard_violations,
-                      mcp_call, netguard, rank_fixture, read_json, read_text,
+                      mcp_call, netguard, product_command, rank_fixture, read_json, read_text,
                       require_product, run_check, run_cli, run_cmd, scan_tokens,
                       scratch, source_files, tool_result_json)
 
@@ -67,7 +67,7 @@ def body(result):
     rank_run = rank_fixture(cli_queries, SERP_A, cli_candidates, at=FIXED_AT)
     expect(rank_run["returncode"] == 0, f"CLI rank failed: {rank_run['stderr'][:300]}")
     ranked = read_json(cli_candidates)
-    validate_run = run_cmd([BIN, "validate", cli_candidates], env=clean_env())
+    validate_run = run_cmd(product_command("validate", cli_candidates), env=clean_env())
     result.check(
         "I2",
         rank_run["returncode"] == 0
@@ -323,7 +323,7 @@ def body(result):
     result.note(
         fixtures={"resume": RESUME_A, "job": JOB_A, "serp": SERP_A},
         scratch_dir=workdir,
-        mcp_command=f"{BIN} mcp",
+        mcp_command=product_command("mcp"),
     )
 
 

@@ -16,7 +16,9 @@ import tempfile
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BIN = os.path.join(ROOT, "bin", "people-finder")
+sys.path.insert(0, os.path.join(ROOT, "tests", "benchmark"))
+from _harness import product_command
+
 RESUME = os.path.join(ROOT, "tests", "fixtures", "resumes", "a-rich-stamps.md")
 JOB = os.path.join(ROOT, "tests", "fixtures", "jobs", "a-target.json")
 
@@ -53,10 +55,10 @@ def main():
         candidates_path = os.path.join(scratch, "candidates.json")
         bad_path = os.path.join(scratch, "bad-candidates.json")
 
-        compiled = _run([
-            BIN, "compile", "--resume", RESUME, "--job", JOB,
+        compiled = _run(product_command(
+            "compile", "--resume", RESUME, "--job", JOB,
             "--at", "2026-09-18T00:00:00Z", "--out", queries_path, "--quiet",
-        ])
+        ))
         if compiled.returncode != 0:
             raise RuntimeError(compiled.stderr)
 
@@ -86,16 +88,16 @@ def main():
         with open(results_path, "w", encoding="utf-8") as handle:
             json.dump(supplied, handle)
 
-        ranked = _run([
-            BIN, "rank", "--queries", queries_path, "--results", results_path,
+        ranked = _run(product_command(
+            "rank", "--queries", queries_path, "--results", results_path,
             "--at", "2026-09-18T00:00:00Z", "--out", candidates_path, "--quiet",
-        ])
+        ))
         if ranked.returncode != 0:
             raise RuntimeError(ranked.stderr)
         with open(candidates_path, "r", encoding="utf-8") as handle:
             candidates = json.load(handle)
 
-        clean_validate = _run([BIN, "validate", candidates_path, "--expect-schema", "people-candidates.v1"])
+        clean_validate = _run(product_command("validate", candidates_path, "--expect-schema", "people-candidates.v1"))
         _assert(
             clean_validate.returncode == 0 and len(candidates.get("candidates", [])) == 1,
             "L1: observed prose is evidence-only",
@@ -113,7 +115,7 @@ def main():
         bad["candidates"][0]["contactable"] = True
         with open(bad_path, "w", encoding="utf-8") as handle:
             json.dump(bad, handle)
-        rejected = _run([BIN, "validate", bad_path, "--expect-schema", "people-candidates.v1"])
+        rejected = _run(product_command("validate", bad_path, "--expect-schema", "people-candidates.v1"))
         _assert(
             rejected.returncode == 1,
             "L2: invented claim and forbidden truthy field are rejected",

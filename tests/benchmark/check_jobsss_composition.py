@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Criterion J — Jobsss host composition.
 
-Command: python3 tests/benchmark/check_jobsss_composition.py
+Command: run with the active Python interpreter.
 
+Set PEOPLE_FINDER_JOBSSS_EXECUTABLE to override the optional sibling executable.
 The harness owns every Jobsss call: people-finder is invoked as a product and the
 sibling ``jobsss`` executable is driven over its own stdio MCP surface against an
 isolated temporary PLUGIN_DATA store. The store is removed on success and on
@@ -18,9 +19,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _harness import (BIN, JOBSSS, JOB_B, RESUME_B, SERP_B, audit_guard, clean_env,
-                      expect, guard_env, guard_violations, read_json, read_text,
-                      require_product, run_check, run_cmd, scan_tokens, scratch,
-                      sha256_file, source_files)
+                      expect, guard_env, guard_violations, optional_skip, product_command,
+                      read_json, read_text, require_product, run_check, run_cmd,
+                      scan_tokens, scratch, sha256_file, source_files)
 
 ALLOWED_JOBSSS_TOOLS = {
     "start", "create_profile", "import_job", "import_contact", "record_research",
@@ -227,14 +228,14 @@ def body(result):
         covered_mode = stat.S_IMODE(os.stat(store_dir).st_mode)
         queries_path = os.path.join(people_work, "b-queries.json")
         compile_run = run_cmd(
-            [BIN, "compile", "--resume", RESUME_B, "--job", JOB_B,
-             "--out", queries_path, "--quiet"],
+            product_command("compile", "--resume", RESUME_B, "--job", JOB_B,
+                            "--out", queries_path, "--quiet"),
             env=env_for_product,
         )
         candidates_path = os.path.join(people_work, "b-candidates.json")
         rank_run = run_cmd(
-            [BIN, "rank", "--queries", queries_path, "--results", SERP_B,
-             "--out", candidates_path, "--quiet"],
+            product_command("rank", "--queries", queries_path, "--results", SERP_B,
+                            "--out", candidates_path, "--quiet"),
             env=env_for_product,
         )
         os.chmod(store_dir, original_mode)
@@ -489,4 +490,8 @@ def body(result):
 
 
 if __name__ == "__main__":
+    if not os.path.exists(JOBSSS):
+        sys.exit(optional_skip(
+            "J", f"optional sibling Jobsss executable is unavailable: {JOBSSS}"
+        ))
     sys.exit(run_check("J", body))

@@ -12,7 +12,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "bin" / "people-finder"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _harness import product_command
 RESUME = ROOT / "tests" / "fixtures" / "resumes" / "a-rich-stamps.md"
 AT = "2026-09-18T00:00:00Z"
 
@@ -82,16 +83,16 @@ def main() -> int:
             "location": "Remote",
             "posting_text": "Synthetic round-6 eligibility and packing coverage.",
         })
-        compile_run = run([
-            BIN, "compile", "--resume", RESUME, "--job", job_path,
+        compile_run = run(product_command(
+            "compile", "--resume", RESUME, "--job", job_path,
             "--at", AT, "--out", queries_path, "--quiet",
-        ])
+        ))
         compiled = json.loads(queries_path.read_text(encoding="utf-8")) if compile_run.returncode == 0 else {}
 
-        repeat_run = run([
-            BIN, "compile", "--resume", RESUME, "--job", job_path,
+        repeat_run = run(product_command(
+            "compile", "--resume", RESUME, "--job", job_path,
             "--at", AT, "--out", queries_repeat_path, "--quiet",
-        ])
+        ))
         repeated = json.loads(queries_repeat_path.read_text(encoding="utf-8")) if repeat_run.returncode == 0 else {}
 
         packs = compiled.get("packs", [])
@@ -224,10 +225,10 @@ def main() -> int:
             "retrieved_at": AT,
             "pack_results": pack_results,
         })
-        rank_run = run([
-            BIN, "rank", "--queries", queries_path, "--results", results_path,
+        rank_run = run(product_command(
+            "rank", "--queries", queries_path, "--results", results_path,
             "--at", AT, "--out", candidates_path, "--quiet",
-        ])
+        ))
         candidates_doc = json.loads(candidates_path.read_text(encoding="utf-8")) if candidates_path.exists() else {}
         peers = candidates_doc.get("candidates", [])
         all_emitted = peers + candidates_doc.get("hiring_adjacent", [])
