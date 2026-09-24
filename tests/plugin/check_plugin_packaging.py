@@ -3,8 +3,9 @@
 
 Command: python3 tests/plugin/check_plugin_packaging.py
 
-This check is additive and independent of the frozen offline benchmark
-(BENCHMARK.md) and of the live gate (E2E_BENCHMARK.md). It never edits them.
+This check is additive and independent of the offline benchmark
+(BENCHMARK.md) and the separately configured live journey
+(tests/e2e/check_profile_jobs_people.py). No E2E_BENCHMARK.md contract is shipped.
 
 What it proves, using only the Python standard library and the product's public
 CLI/MCP surfaces:
@@ -13,7 +14,7 @@ CLI/MCP surfaces:
   P2  mcp.json conforms to the Agent Plugins 1.0.0 stdio server rules
   P3  the package carries no credential, remote transport, host-state
       dependency or absolute user path
-  P4  the declared launcher resolves inside the plugin root and runs
+  P4  the declared launcher resolves inside the plugin root and runs through the active Python interpreter
   P5  the declared command + args serve exactly the documented MCP surface
   P6  the installed skill, the MCP catalogue and the CLI inventory agree
   P7  real offline calls over the declared server on labelled fixtures
@@ -162,7 +163,6 @@ def speak(argv, requests, *, env=None, cwd=None, timeout=120):
     record["responses"] = responses
     record["invalid_stdout_lines"] = invalid
     record["session"] = session
-    record["command"] = " ".join(argv)
     return record
 
 
@@ -372,16 +372,19 @@ def body(result):
          "params": {"protocolVersion": "2024-11-05", "clientInfo": {"name": "c", "version": "1"}}},
     ], cwd=root)
     declared_init = (declared_run["session"].get("1") or {}).get("result") or {}
+    portable_argv = declared_run.get("argv") or []
+    portable_python_launch = portable_argv[:2] == [sys.executable, resolved]
     result.check(
         "P4",
-        contained and os.access(resolved, os.X_OK) and in_root_run["returncode"] == 0
+        contained and portable_python_launch and in_root_run["returncode"] == 0
         and declared_run["returncode"] == 0 and bool(declared_init)
         and os.path.realpath(BIN) == resolved,
         {
             "declared_command_token": relative_command,
             "resolved_launcher": resolved,
             "resolved_inside_plugin_root": contained,
-            "executable_bit_set": os.access(resolved, os.X_OK),
+            "portable_python_launch": portable_argv[:2],
+            "active_python_interpreter": sys.executable,
             "version_command": in_root_run["command"],
             "version_exit_code": in_root_run["returncode"],
             "version_stdout": in_root_run["stdout"].strip(),
@@ -804,8 +807,8 @@ def body(result):
         launcher=resolved,
         scratch_dir=workdir,
         hash_frozen_benchmark=sha256_file(root_path("BENCHMARK.md")),
-        hash_live_gate_contract=(sha256_file(root_path("E2E_BENCHMARK.md"))
-                                 if os.path.isfile(root_path("E2E_BENCHMARK.md")) else None),
+        live_e2e_journey="tests/e2e/check_profile_jobs_people.py",
+        live_e2e_journey_sha256=sha256_file(root_path("tests/e2e/check_profile_jobs_people.py")),
         evidence_classes={
             "offline": True,
             "fixture": True,

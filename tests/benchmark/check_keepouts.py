@@ -64,6 +64,7 @@ OTHER_CHECKS = {
     "I": "tests/benchmark/check_interfaces.py",
     "J": "tests/benchmark/check_jobsss_composition.py",
 }
+STANDALONE_GATE_CHECKS = ("D", "R", "E", "I")
 
 
 def parse_cli_inventory():
@@ -319,14 +320,15 @@ def body(result):
         },
     )
 
-    # ---- K8: the five other benchmark commands stay offline ---------------
+    # ---- K8: the other standalone-gate commands stay offline -------------
     offline_rows = {}
     offline_documents = {}
     all_offline = True
-    for criterion, relative in OTHER_CHECKS.items():
+    for criterion in STANDALONE_GATE_CHECKS:
+        relative = OTHER_CHECKS[criterion]
         target = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)))), relative)
-        run = run_cmd(["python3", target], env=guard_env(net, base=clean_env()), timeout=600)
+        run = run_cmd([sys.executable, target], env=guard_env(net, base=clean_env()), timeout=600)
         document = run["json"] or {}
         violations = guard_violations(net)
         row = {
@@ -345,7 +347,8 @@ def body(result):
     result.check("K8", all_offline, {
         "netguard": "PYTHONPATH sitecustomize denies socket creation in every check and its subprocesses",
         "commands": offline_rows,
-        "all_five_offline": all_offline,
+        "all_standalone_gate_dependencies_offline": all_offline,
+        "optional_jobsss_integration_run_by_keepout_check": False,
         "live_network_scored_as_zero": True,
     })
 

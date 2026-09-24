@@ -156,15 +156,22 @@ Clients that implement Agent Plugins read those fixed locations directly. For a
 client that needs a rendered pointer instead, `compat/hermes/config.yaml.template`
 is the thin Hermes adapter.
 
-Reference material at the repository root: `README.md` (operations, gate),
-`ARCHITECTURE.md` (design freeze), `BENCHMARK.md` (reviewer-owned offline
-acceptance contract), `E2E_BENCHMARK.md` (reviewer-owned live gate), `SCORE.md`
-(scoring).
+Reference material at the repository root: README.md (operations and gate),
+ARCHITECTURE.md (design), BENCHMARK.md (offline acceptance contract), and SCORE.md
+(scoring). The standalone default gate runs D, R, E, I and K. Criterion J is an optional
+sibling JobSSS integration check; set JOBSSS_BIN when the executable is outside
+../jobsss/bin/jobsss.
 
-Offline verification of this package (manifest, registration, skill, install,
-uninstall, keep-outs):
+The separately configured live journey is
+tests/e2e/check_profile_jobs_people.py. It is not run by the offline gate; consult that
+script for its live search and JobSSS requirements. This package does not ship a separate
+E2E_BENCHMARK.md contract.
 
-```sh
-python3 tests/plugin/check_plugin_packaging.py       # deterministic, offline
-python3 tests/plugin/check_hermes_host_probe.py      # real isolated Hermes host probe
-```
+Offline verification:
+
+~~~
+python3 tests/plugin/check_plugin_packaging.py        # deterministic, offline
+python3 tests/plugin/check_hermes_host_probe.py       # isolated Hermes host probe
+python3 tests/tools/run_gate.py <label>               # standalone D/R/E/I/K gate
+python3 tests/tools/run_gate.py <label> --with-jobsss # optional Criterion J
+~~~

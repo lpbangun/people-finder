@@ -2,6 +2,8 @@
 
 ## Scoring from command evidence
 
+The standalone default gate covers D, R, E, I and K. Criterion J is reported separately as an optional sibling integration; full convergence still requires a passing J result.
+
 Score each named criterion independently:
 
 - `D`: typed discovery and query packs
