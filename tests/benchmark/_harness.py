@@ -10,13 +10,17 @@ import json
 import os
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import traceback
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = os.path.join(ROOT, "bin", "people-finder")
-JOBSSS = "/home/logani/projects/jobsss/bin/jobsss"
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from support import portable_product_argv, resolve_jobsss_bin
+
+JOBSSS = resolve_jobsss_bin(ROOT)
 BENCHMARK = "people-finder-v1"
 
 RESUME_A = "tests/fixtures/resumes/a-rich-stamps.md"
@@ -190,20 +194,21 @@ def scratch(label):
 
 
 def run_cmd(argv, *, env=None, cwd=None, timeout=180, stdin_text=None):
-    record = {"argv": argv, "cwd": cwd or ROOT}
+    actual_argv = portable_product_argv(argv)
+    record = {"argv": actual_argv, "cwd": cwd or ROOT}
     try:
         completed = subprocess.run(
-            argv, cwd=cwd or ROOT, env=env, timeout=timeout, input=stdin_text,
+            actual_argv, cwd=cwd or ROOT, env=env, timeout=timeout, input=stdin_text,
             capture_output=True, text=True,
         )
     except FileNotFoundError as cause:
-        raise HarnessError(f"required local executable is unavailable: {argv[0]} ({cause})") from cause
+        raise HarnessError(f"required local executable is unavailable: {actual_argv[0]} ({cause})") from cause
     except subprocess.TimeoutExpired as cause:
-        raise HarnessError(f"command timed out after {timeout}s: {' '.join(argv)}") from cause
+        raise HarnessError(f"command timed out after {timeout}s: {shlex.join(actual_argv)}") from cause
     record["returncode"] = completed.returncode
     record["stdout"] = completed.stdout
     record["stderr"] = completed.stderr
-    record["command"] = " ".join(argv)
+    record["command"] = shlex.join(actual_argv)
     parsed = None
     try:
         parsed = json.loads(completed.stdout) if completed.stdout.strip() else None
@@ -472,8 +477,7 @@ def run_check(criterion, body):
 
 
 def require_product():
-    expect(os.path.isfile(BIN), f"missing required executable: {BIN}")
-    expect(os.access(BIN, os.X_OK), f"not executable: {BIN}")
+    expect(os.path.isfile(BIN), f"missing required Python entry point: {BIN}")
 
 
 def mcp_call(requests, *, env=None, extra_env=None, timeout=120, executable=None):

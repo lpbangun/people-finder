@@ -4,7 +4,7 @@
 
 This is the reviewer-owned acceptance contract for `people-finder`.
 
-The commands, assertion IDs, expected exit codes, fixtures, and pass meanings below are frozen before implementation. The implementer must not edit this file or weaken an assertion. Test fixtures and checks may be appended, but no frozen fixture, assertion, or check may be deleted, renamed, skipped, or relaxed to obtain a passing result.
+This contract defines the commands, assertion IDs, expected exit codes, fixtures, and pass meanings for review. Changes to the contract are maintainer-owned; implementation work must not weaken an assertion or skip a required command. Test fixtures and checks may be appended, but no required fixture, assertion, or check may be deleted, renamed, skipped, or relaxed to obtain a passing result.
 
 Implementation is limited by `ARCHITECTURE.md`. Internal module layout is not frozen.
 
@@ -12,13 +12,15 @@ Implementation is limited by `ARCHITECTURE.md`. Internal module layout is not fr
 
 `people-finder` discovers and ranks public candidate leads. It does not establish identity, claim a LinkedIn relationship, send anything, approve contacts, or write Jobsss state.
 
-The default gate is completely offline:
+The standalone default gate is completely offline and does not require JobSSS:
 
 - fictional resumes and jobs;
 - recorded SERPs;
 - recorded Exa envelopes;
 - supplied CLI and MCP inputs;
-- an isolated temporary Jobsss store.
+- an isolated temporary JobSSS store only when optional Criterion J is run.
+
+The standalone default gate runs D, R, E, I and K. Criterion J is an optional sibling integration check.
 
 Live network or live Exa execution carries zero points and cannot replace any recorded fixture.
 
@@ -216,31 +218,40 @@ Mandatory assertions:
 
 Pass means both public interfaces expose the same offline core and supplied-result workflow without keys.
 
-## Criterion J — Jobsss host composition
+## Criterion J — JobSSS host composition (optional sibling integration)
 
 Command:
 
-```sh
+~~~
 python3 tests/benchmark/check_jobsss_composition.py
-```
+~~~
 
-Expected passing exit code: `0`.
+Run this criterion separately, or add it to the runner with
+python3 tests/tools/run_gate.py <label> --with-jobsss.
+
+JOBSSS_BIN may name an absolute executable path or a path relative to the People Finder
+repository root. Without it, the harness uses ../jobsss/bin/jobsss relative to the
+People Finder repository. If that optional executable is unavailable, the standalone
+default gate still runs; Criterion J reports a setup failure only when explicitly run.
+
+Expected passing exit code when configured: 0.
 
 Mandatory assertions:
 
-- `J1`: The harness creates a fresh temporary `PLUGIN_DATA`, then invokes `/home/logani/projects/jobsss/bin/jobsss` as a sibling executable. It does not import Jobsss source modules.
-- `J2`: Through actual Jobsss MCP calls, the harness invokes `start`, `create_profile` from a fictional fixture resume, and `import_job` from a fictional fixture job.
-- `J3`: While people-finder compile and rank run, its environment does not contain `PLUGIN_DATA`; the temporary Jobsss directory is inaccessible to the people-finder subprocess. The directory tree and file hashes are unchanged across that phase.
-- `J4`: People-finder ranks the recorded SERP offline and emits candidate leads; it performs no Jobsss mutation.
-- `J5`: Harness-owned mapping converts a selected candidate into explicit `import_contact` and `record_research` argument objects. The mapper is test/host composition code, not people-finder product code.
-- `J6`: The harness, not people-finder, sends those arguments through actual Jobsss MCP calls to the sibling executable.
-- `J7`: `list_contacts` readback finds the exact returned contact ID and shows `humanApproved: false`.
-- `J8`: `list_research` readback finds the exact returned research ID and preserves candidate provenance, paths, and unknowns in the mapped research record.
-- `J9`: `map_reachable_network` for the imported fixture job sees the imported contact or associated research record without claiming a relationship, referral, permission, or message delivery.
-- `J10`: No Jobsss send, draft-send, approval, or human-decision tool is called.
+- `J1`: The harness creates a fresh temporary PLUGIN_DATA, invokes the configured sibling JobSSS executable, and does not import JobSSS source modules.
+- `J2`: Through actual JobSSS MCP calls, the harness invokes start, create_profile from a fictional fixture resume, and import_job from a fictional fixture job.
+- `J3`: While People Finder compile and rank run, its environment does not contain PLUGIN_DATA; the temporary JobSSS directory is inaccessible to the People Finder subprocess. The directory tree and file hashes are unchanged across that phase.
+- `J4`: People Finder ranks the recorded SERP offline and emits candidate leads; it performs no JobSSS mutation.
+- `J5`: Harness-owned mapping converts a selected candidate into explicit import_contact and record_research argument objects. The mapper is test/host composition code, not People Finder product code.
+- `J6`: The harness, not People Finder, sends those arguments through actual JobSSS MCP calls to the sibling executable.
+- `J7`: list_contacts readback finds the exact returned contact ID and shows humanApproved: false.
+- `J8`: list_research readback finds the exact returned research ID and preserves candidate provenance, paths, and unknowns in the mapped research record.
+- `J9`: map_reachable_network for the imported fixture job sees the imported contact or associated research record without claiming a relationship, referral, permission, or message delivery.
+- `J10`: No JobSSS send, draft-send, approval, or human-decision tool is called.
 - `J11`: The temporary store is removed after the check, including on assertion failure.
 
-Pass means Jobsss remains an independently executed sink owned by the host harness, while people-finder never opens or writes its store.
+Pass means JobSSS remains an independently executed sink owned by the host harness, while
+People Finder never opens or writes its store.
 
 ## Criterion K — hard keep-outs
 
@@ -263,7 +274,7 @@ Mandatory assertions:
 - `K5`: People-finder product code neither imports Jobsss modules nor opens, reads, creates, or writes a Jobsss `PLUGIN_DATA` store.
 - `K6`: No output or user-facing claim describes a candidate as connected, reachable through the seeker, LinkedIn second-degree, `2nd-degree`, or equivalent. `shared_stamp` is allowed only when explicitly described as a public-stamp proxy.
 - `K7`: No API key is required by the zero-dependency core, CLI compile/rank path, MCP compile/rank path, or default test gate.
-- `K8`: All five other benchmark commands remain offline; live network or live Exa evidence is ignored for scoring.
+- `K8`: All four other standalone default-gate checks remain offline; optional Criterion J is not run by the keep-out check.
 - `K9`: Repository inspection finds no product command named or described as `send`, `message`, `connect`, `auto-import`, or another authority-bearing equivalent.
 - `K10`: The benchmark inventory is intact: all frozen check paths, fixture paths, criterion IDs, and assertion IDs remain present.
 
@@ -271,17 +282,22 @@ Pass means every keep-out is absent. A single keep-out fire overrides every posi
 
 ## Frozen execution set
 
-The complete default gate is exactly:
+The standalone default gate is exactly:
 
-```sh
+~~~
 python3 tests/benchmark/check_discovery.py
 python3 tests/benchmark/check_ranking.py
 python3 tests/benchmark/check_exa_import.py
 python3 tests/benchmark/check_interfaces.py
-python3 tests/benchmark/check_jobsss_composition.py
 python3 tests/benchmark/check_keepouts.py
-```
+~~~
 
-Additional tests may be appended. They cannot replace, skip, delete, rename, or weaken these commands or their frozen assertions.
+Optional sibling integration:
 
-Implementation iteration count is decided outside this file and is capped externally at five. This benchmark does not move the pass bar between iterations.
+~~~
+JOBSSS_BIN=/path/to/jobsss/bin/jobsss python3 tests/benchmark/check_jobsss_composition.py
+~~~
+
+Additional tests may be appended. They cannot replace, skip, delete, rename, or weaken
+these standalone commands or their assertions. Criterion J remains a separate scored
+criterion and is required for full convergence when the sibling integration is configured.

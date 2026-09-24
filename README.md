@@ -49,21 +49,29 @@ Every operation is offline and credential-free: supplied local files only, no AP
 search backend, no network call. Exit codes: `0` success, `2` malformed or missing input
 (no output artifact is written in that case), `1` unexpected internal failure.
 
-## Default gate (frozen)
+## Standalone default gate (offline)
 
-```sh
-python3 tests/benchmark/check_discovery.py          # D  typed discovery and query packs
-python3 tests/benchmark/check_ranking.py            # R  ranking, provenance, non-invention
-python3 tests/benchmark/check_exa_import.py         # E  recorded provider import
-python3 tests/benchmark/check_interfaces.py         # I  CLI and MCP parity
-python3 tests/benchmark/check_jobsss_composition.py # J  Jobsss host composition
-python3 tests/benchmark/check_keepouts.py           # K  hard keep-outs
-```
+The standalone gate runs typed discovery, ranking, recorded Exa import, CLI/MCP parity,
+and hard keep-outs. It uses the active Python interpreter and does not require a JobSSS
+checkout or provider credentials.
 
-Each command prints exactly one JSON object to stdout, keeps diagnostics on stderr, exits `0`
-only when every frozen assertion for its criterion passed, and performs no live network call.
-Convenience runner: `python3 tests/tools/run_gate.py <label>` writes raw stdout, stderr, exit
-codes and an assertion summary to `.tmp/benchmark-<label>/`.
+~~~
+python3 tests/tools/run_gate.py <label>
+# Windows: py -3 tests/tools/run_gate.py <label>
+~~~
+
+The summary records Criterion J as skipped because sibling integration is optional. To run
+it, pass --with-jobsss. The runner uses the same Python interpreter for every check.
+JOBSSS_BIN may point to an executable elsewhere. If it is unset, the harness looks for
+../jobsss/bin/jobsss relative to this repository.
+
+~~~
+JOBSSS_BIN=/path/to/jobsss/bin/jobsss python3 tests/tools/run_gate.py <label> --with-jobsss
+~~~
+
+Each check prints one JSON object to stdout, keeps diagnostics on stderr, and reports its
+exit status and assertion results in .tmp/benchmark-<label>/. Criterion J exercises a
+host-owned composition boundary; it does not change the stateless People Finder core.
 
 ## Plugin packaging (additive checks)
 
@@ -116,11 +124,26 @@ tests/tools/                      fixture builder and gate runner
 
 ## Boundary with the sibling tools
 
-`jobsss` is a later sink and is never the search engine; `contact-brief` is downstream and
-never the caller. People-finder does not import Jobsss modules, does not open or write a
-Jobsss `PLUGIN_DATA` store, and exposes no `send`, `message`, `connect`, `approve` or
-`auto-import` command. The composition check proves the host harness can drive the sibling
-`jobsss` executable over its own MCP surface in an isolated temporary store while
-people-finder runs with no `PLUGIN_DATA` in its environment and no access to that store.
+JobSSS is a later sink and Contact Brief is downstream. People Finder does not import
+JobSSS modules, open or write a JobSSS PLUGIN_DATA store, or expose a send, message,
+connect, approve, or auto-import command. Optional Criterion J proves the host harness
+can drive a configured sibling JobSSS executable over its own MCP surface in an isolated
+temporary store while People Finder runs without PLUGIN_DATA and has no access to that
+store. Set JOBSSS_BIN when the executable is outside ../jobsss/bin/jobsss.
 
 All fixtures are fictional. No real resume, contact, cookie, token or API key appears in them.
+
+Reference material at the repository root: README.md (operations and gate), ARCHITECTURE.md
+(design), BENCHMARK.md (offline acceptance contract), and SCORE.md (scoring). The
+separately configured live journey is tests/e2e/check_profile_jobs_people.py. It is not
+part of the offline gate; consult that script for live search and JobSSS requirements.
+This package does not ship a separate E2E_BENCHMARK.md contract.
+
+Offline verification:
+
+~~~
+python3 tests/plugin/check_plugin_packaging.py        # deterministic package smoke
+python3 tests/plugin/check_hermes_host_probe.py       # isolated Hermes host probe
+python3 tests/tools/run_gate.py <label>               # standalone D/R/E/I/K gate
+python3 tests/tools/run_gate.py <label> --with-jobsss # add optional Criterion J
+~~~

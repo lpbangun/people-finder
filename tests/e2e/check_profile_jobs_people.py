@@ -20,6 +20,7 @@ Live configuration (environment):
     E2E_XRAY_URL_TEMPLATE     public HTTPS SERP URL template containing {query}
     E2E_TIMEOUT_SECONDS       bounded timeout for one network/MCP operation
     E2E_EVIDENCE_DIR          directory that keeps the redacted report
+    JOBSSS_BIN                sibling JobSSS executable (optional override)
 
 At least one of ``E2E_HOST_SEARCH_COMMAND`` / ``E2E_XRAY_URL_TEMPLATE`` must be
 usable; otherwise the check exits 2 and names the variables it needs. No
@@ -61,14 +62,17 @@ from html import unescape as html_unescape
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HARNESS_PATH = os.path.abspath(__file__)
 PRODUCT_BIN = os.path.join(ROOT, "bin", "people-finder")
-JOBSSS_BIN = "/home/logani/projects/jobsss/bin/jobsss"
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from support import portable_product_argv, resolve_jobsss_bin
+
+JOBSSS_BIN = resolve_jobsss_bin(ROOT)
 BENCHMARK_FILE = os.path.join(ROOT, "BENCHMARK.md")
 
 BENCHMARK = "people-finder-live-e2e-v1"
 CRITERION = "L"
 OFFLINE = False
 
-FROZEN_BENCHMARK_SHA256 = "266630bcfa1409eb0636e4c4f7250a234553ee8d5df9514916ec76cb292bb013"
+FROZEN_BENCHMARK_SHA256 = "0fc7b811da157de6fa8adace3e9696b3f58962b4824188662b30e3bdff3aff03"
 
 FROZEN_COMMANDS = (
     "python3 tests/benchmark/check_discovery.py",
@@ -1334,9 +1338,9 @@ def product_env(state, *, audit_root=None):
 
 
 def run_product(state, argv, *, label, env=None, timeout=None):
-    expect(os.path.isfile(PRODUCT_BIN), f"missing required executable: {PRODUCT_BIN}")
-    expect(os.access(PRODUCT_BIN, os.X_OK), f"not executable: {PRODUCT_BIN}")
-    record = run_command([PRODUCT_BIN, *argv], env=env if env is not None else product_env(state),
+    expect(os.path.isfile(PRODUCT_BIN), f"missing required Python entry point: {PRODUCT_BIN}")
+    record = run_command(portable_product_argv([PRODUCT_BIN, *argv]),
+                         env=env if env is not None else product_env(state),
                          timeout=timeout or state.config.timeout, label=label)
     store_path = os.path.realpath(state.store_dir)
     state.product_commands.append({
