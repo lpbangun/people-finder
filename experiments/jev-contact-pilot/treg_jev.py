@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from treg_key import read_key
 
 
 TREG_API = "https://treg.to/call/treg.people.search"
@@ -127,10 +128,10 @@ def main():
         recordings = json.loads(args.recordings.read_text(encoding="utf-8")) if args.recordings else None
         if recordings is not None and len(recordings) != len(titles):
             parser.error("recordings count must match search_titles count")
-        token = os.environ.get("TREG_TOKEN")
+        token = os.environ.get("TREG_TOKEN") or read_key()
         if recordings is None and not token:
             if not sys.stdin.isatty():
-                parser.error("TREG_TOKEN is required for noninteractive discovery")
+                parser.error("TREG_TOKEN or a saved ~/.config/jobsss/treg.key is required for noninteractive discovery")
             token = getpass.getpass("Treg token (hidden; not saved): ").strip()
         found = []
         saved_calls = []

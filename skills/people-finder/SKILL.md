@@ -128,13 +128,28 @@ labelled `public_stamp_proxy`; it never claims a member-graph edge.
 
 ## Host-owned email discovery (handoff, not capability)
 
-Work-email discovery stays outside this plugin. For an approved fixed list, the
-host may run one bounded Fiber/Exa Agent lookup per already-identified person
-and hand each normalized result to `contact-brief`; the host owns concurrency,
-spend, resumable journaling and raw-provider retention. people-finder adds no
-Fiber credentials, provider calls, mailbox checks or automatic contact writes,
-and a candidate output is never proof of contactability. Provider-reported
-addresses remain `provider_reported`/`not_checked`, never a verified mailbox.
+Work-email discovery stays outside this plugin. The host companion at
+`experiments/jev-contact-pilot/` runs Treg people search, Jev ranking, and then
+Treg email finding for one or two Jev-ranked people. It records each paid call
+in a private directory and does not send outreach or write contact records.
+Provider-reported addresses remain `provider_reported`/`not_checked`, never a
+verified mailbox. Confirm identity and verify the address separately.
+
+In Hermes, locate this plugin's registered `people-finder` launcher in
+`HERMES_HOME/config.yaml`; its parent directory is the plugin root. Run the
+host companion from that root:
+
+```sh
+python3 experiments/jev-contact-pilot/openrouter_key.py  # one-time hidden key prompt
+python3 experiments/jev-contact-pilot/treg_key.py        # one-time hidden token prompt
+python3 experiments/jev-contact-pilot/treg_jev.py /private/job-spec.json --out-dir /private/job-run
+python3 experiments/jev-contact-pilot/treg_email.py /private/job-spec.json /private/job-run/jev-results.json --out-dir /private/job-run
+```
+
+Both secrets are saved under `~/.config/jobsss/` with owner-only permissions.
+`OPENROUTER_API_KEY` and `TREG_TOKEN` environment variables override the files.
+Use private absolute paths for inputs and outputs. See the companion README for
+the spec shape, cost limits and replay options.
 
 ## Evidence labels
 

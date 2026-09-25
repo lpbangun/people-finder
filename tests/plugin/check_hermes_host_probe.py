@@ -12,6 +12,7 @@ invokes the real Hermes binary against a fresh temporary `HERMES_HOME`:
   H3  the staged skill is discovered by the host surface (`hermes skills list`)
   H4  uninstall removes the skill without touching user data
   H5  the real user profile was never read or written
+  H6  the host companion commands are reachable through the registered plugin root
 
 Boundary: this probe proves local host integration only. It performs no people
 or job discovery, sends nothing, and calls no paid provider. An agent-mediated
@@ -204,6 +205,17 @@ def body(result, hermes, workdir):
             "host_stdout_excerpt": listed["stdout"].strip()[:600],
         },
     )
+
+    # ---- H6: the host companion is executable from the registered root ----
+    companion = os.path.join(ROOT, "experiments", "jev-contact-pilot")
+    commands = ("treg_jev.py", "treg_email.py", "openrouter_key.py", "treg_key.py")
+    checks = {name: run([sys.executable, os.path.join(companion, name), "--help"], env=env)
+              for name in commands[:2]}
+    result.check("H6", all(os.path.isfile(os.path.join(companion, name)) for name in commands)
+                 and all(value["returncode"] == 0 for value in checks.values()),
+                 {"companion": companion,
+                  "command_exit_codes": {name: value["returncode"] for name, value in checks.items()},
+                  "key_path": os.path.join(env["HOME"], ".config", "jobsss", "openrouter.key")})
 
     # ---- H4: uninstall removes the skill, user data survives --------------
     data_dir = os.path.join(hermes_home, "user-data")

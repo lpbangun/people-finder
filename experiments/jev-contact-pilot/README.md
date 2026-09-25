@@ -37,7 +37,9 @@ Run in Ubuntu/WSL:
 python3 treg_jev.py "/private/job-spec.json" --out-dir "/private/job-run"
 ```
 
-The script reads `TREG_TOKEN` from the process environment or prompts for it.
+The script reads `TREG_TOKEN` from the process environment, then
+`~/.config/jobsss/treg.key`, then prompts for it. Save it once with
+`python3 treg_key.py` (hidden prompt, owner-only file) for noninteractive Hermes runs.
 For Jev, it reads `OPENROUTER_API_KEY`, then the locally saved key, then prompts.
 To save the OpenRouter key once, run `python3 openrouter_key.py` in Ubuntu and
 paste it at the hidden prompt. This writes `~/.config/jobsss/openrouter.key`
@@ -54,7 +56,19 @@ python3 treg_jev.py "/private/job-spec.json" --out-dir "/private/job-run" --rank
 
 For a recorded Treg response, use `--recordings "/private/recordings.json"`
 with a JSON array containing one response per search title. This is replay,
-not a new live discovery. The runner does not find emails or send outreach.
+not a new live discovery. After Jev has ranked people, find emails only for its
+one or two shortlisted people:
+
+```sh
+python3 treg_email.py "/private/job-spec.json" "/private/job-run/jev-results.json" --out-dir "/private/job-run"
+```
+
+Use `--candidate-id ID` (repeat at most twice) to select different Jev-ranked
+people after reviewing the ranking. The Treg call uses a $0.05 per-person route
+cost cap by default. Each call is recorded before dispatch and is never silently
+retried after uncertainty. The command prints names, LinkedIn URLs and found
+emails; raw results remain private. A provider email is not identity proof or
+mailbox verification. No outreach is sent.
 
 The existing offline people-finder `compile` and `rank` commands remain
 available for a separately controlled comparison. This host runner applies its
