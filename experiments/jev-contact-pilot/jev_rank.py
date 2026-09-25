@@ -92,17 +92,25 @@ def main():
         a = answer["answers"]
         route = a["route"]["choice"]
         route_confidence = a["route"].get("confidence")
-        route_needs_review = route_confidence is not None and route_confidence < 0.6
+        probabilities = a["route"].get("probabilities") or {}
+        lane_ambiguous = route_confidence is not None and route_confidence < 0.6
+        # Ambiguity between peer and hiring affects the outreach route, but
+        # both are useful contacts. Hold a person only when "neither" remains
+        # plausible, or when no distribution was returned to inspect.
+        route_needs_review = lane_ambiguous and (
+            not probabilities or probabilities.get("neither", 0) >= 0.2
+        )
         # These are rubric scores, not calibrated probabilities of contact success.
         score = round(0.5 * a["role_fit"]["score"] + 0.3 * a["shared_context"]["score"] + 0.2 * a["evidence"]["score"], 4)
         results.append({"candidate_id": person["candidate_id"], "name": person["name"], "linkedin_url": url,
                         "lane": route, "score": score, "jev": answer,
                         "route_confidence": route_confidence,
+                        "lane_ambiguous": lane_ambiguous,
                         "route_needs_review": route_needs_review,
                         "requires_human_review": True})
     results.sort(key=lambda row: (row["lane"] != "peer", row["lane"] != "hiring", -row["score"], row["candidate_id"]))
-    # Keep the peer and hiring paths distinct. A low-confidence route never
-    # becomes an automatic shortlist choice, regardless of its rubric score.
+    # Keep the peer and hiring paths distinct. A person whose "neither"
+    # probability remains material waits for review before shortlisting.
     peer = next((row for row in results if row["lane"] == "peer" and not row["route_needs_review"]), None)
     hiring = next((row for row in results if row["lane"] == "hiring" and not row["route_needs_review"]), None)
     shortlist = [row for row in (peer, hiring) if row is not None]

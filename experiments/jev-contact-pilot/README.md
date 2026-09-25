@@ -11,6 +11,8 @@ bounded company-domain/title searches; the runner records every response and
 call cost, requires the matching company domain and a public LinkedIn profile,
 deduplicates, and sends the eligible candidates to Jev. Jev returns a ranked
 list and a peer/hiring shortlist. Every shortlist entry requires human review.
+An uncertain peer-versus-hiring lane stays marked for review; it does not
+discard a relevant person when Jev assigns very little weight to `neither`.
 This is the experiment's host workflow, not a network capability added to the
 portable people-finder plugin.
 
