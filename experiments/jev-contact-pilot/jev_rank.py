@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from openrouter_key import read_key
+
 API = "https://openrouter.ai/api/alpha/decisions"
 MODEL = "typesafe/jev-1.13"
 
@@ -65,10 +67,10 @@ def main():
     if len(candidates) > 30:
         parser.error("limit is 30 candidates per job")
     replay = json.loads(args.responses.read_text(encoding="utf-8")) if args.responses else None
-    key = os.environ.get("OPENROUTER_API_KEY")
+    key = (os.environ.get("OPENROUTER_API_KEY") or read_key()) if replay is None else None
     if replay is None and not key:
         if not sys.stdin.isatty():
-            parser.error("OPENROUTER_API_KEY is required for noninteractive live Jev calls")
+            parser.error("OPENROUTER_API_KEY or a saved ~/.config/jobsss/openrouter.key is required for noninteractive live Jev calls")
         key = getpass.getpass("OpenRouter API key (hidden; not saved): ").strip()
         if not key:
             parser.error("an OpenRouter API key is required for live Jev calls")

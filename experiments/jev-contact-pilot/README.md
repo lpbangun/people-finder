@@ -35,8 +35,13 @@ Run in Ubuntu/WSL:
 python3 treg_jev.py "/private/job-spec.json" --out-dir "/private/job-run"
 ```
 
-The script reads `TREG_TOKEN` and `OPENROUTER_API_KEY` from the process
-environment or prompts for each secret without saving it. Default Treg search
+The script reads `TREG_TOKEN` from the process environment or prompts for it.
+For Jev, it reads `OPENROUTER_API_KEY`, then the locally saved key, then prompts.
+To save the OpenRouter key once, run `python3 openrouter_key.py` in Ubuntu and
+paste it at the hidden prompt. This writes `~/.config/jobsss/openrouter.key`
+outside Git with owner-only permissions (0600). The key is local plaintext;
+protect your Ubuntu account and do not put the key in chat or the job spec.
+Default Treg search
 cap is $0.03 per query; use `--max-cost` to change it. To inspect provider
 results before spending on Jev, use `--discover-only`. Resume from its saved
 `jev-input.json` without repeating Treg searches using `--rank-only`:
@@ -72,11 +77,9 @@ bash run_pilot.sh "$RUN_DIR"
 `inputs/notion.json`. The launcher writes both result files there, outside Git.
 
 Create a key at [OpenRouter API Keys](https://openrouter.ai/settings/keys), then
-run the Python command in an Ubuntu/WSL terminal. Paste the key when it asks
-`OpenRouter API key (hidden; not saved):`. The script holds it only in memory for
-that run. For noninteractive automation, set `OPENROUTER_API_KEY` in the process
-environment using your secret manager. Never paste the key into chat, commit it,
-or put it in the pilot input JSON.
+use the one-time save command above or enter it at the live hidden prompt.
+For noninteractive automation, set `OPENROUTER_API_KEY` using your secret
+manager. Never paste the key into chat, commit it, or put it in pilot JSON.
 
 Use `--responses private/recorded-jev.json` to replay recorded responses without
 network access. The script only evaluates supplied candidates; it cannot
