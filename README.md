@@ -27,13 +27,12 @@ Second-degree warmth is approximated as `shared_stamp`: two of the seeker's publ
 observed in one supplied result. It is labelled `public_stamp_proxy` and never claims a
 member-graph edge.
 
-For an approved fixed list, email enrichment is a separate host-owned stage. The host may
-correlate selected leads to one Fiber/Exa Agent lookup each, but it must own bounded
-concurrency/spend, resumable journaling, raw-provider retention and the handoff into
-contact-brief. See [people-finder issue #3](https://github.com/lpbangun/people-finder/issues/3).
-People-finder remains offline and credential-free: it does not call Fiber, inspect mailboxes,
-infer addresses or write contact records, and a candidate output is never proof of
-contactability.
+For a target job, the host companion in `experiments/jev-contact-pilot/` can
+discover people with Treg, rank them with Jev, then find emails with Treg for
+one or two selected candidates. Each provider call is recorded privately with
+its cost. People Finder's bundled runtime remains offline and credential-free:
+it does not inspect mailboxes, infer addresses or write contact records, and a
+candidate output is never proof of contactability.
 
 ## Public operations
 
